@@ -82,21 +82,21 @@ After deploy, open `PUBLIC_URL` and sign in with your admin account.
 
 ## Custom domain + HTTPS
 
-1. **DNS** — Add an **A record** pointing to `147.93.104.138`:
-   - Host: `hq` (or `@`) → `147.93.104.138`
-   - Optional: `www.hq` → `147.93.104.138`
+1. **DNS** — Add **A records** pointing to `147.93.104.138`:
+   - `@` → `147.93.104.138` (for `bitsparx.me`)
+   - `www` → `147.93.104.138` (for `www.bitsparx.me`)
 
 2. **On the server** (after app is deployed):
    ```bash
    cd /opt/bitsparx-hq
    git pull origin main
    chmod +x deploy/scripts/configure-domain.sh
-   ./deploy/scripts/configure-domain.sh hq.yourdomain.com
+   ./deploy/scripts/configure-domain.sh bitsparx.me
    ```
-   This updates nginx, obtains a Let's Encrypt certificate, rebuilds the frontend with `REACT_APP_BACKEND_URL=https://hq.yourdomain.com`, and sets CORS + secure cookies.
+   This updates nginx, obtains a Let's Encrypt certificate, rebuilds the frontend with `REACT_APP_BACKEND_URL=https://bitsparx.me`, and sets CORS + secure cookies.
 
 3. **Or during deploy from Mac:**
    ```bash
-   APP_DOMAIN=hq.yourdomain.com PUBLIC_URL=https://hq.yourdomain.com ./deploy/deploy.sh
+   APP_DOMAIN=bitsparx.me PUBLIC_URL=https://bitsparx.me ./deploy/deploy.sh
    ```
    Then run `configure-domain.sh` on the server for SSL if not done yet.
