@@ -1,0 +1,33 @@
+#!/usr/bin/expect -f
+set timeout 1800
+set password $env(SSHPASS)
+set host $env(SSH_HOST)
+
+if {[info exists env(SSH_SCRIPT)]} {
+  spawn ssh -o StrictHostKeyChecking=accept-new $host bash -s
+} else {
+  set cmd $env(SSH_CMD)
+  spawn ssh -o StrictHostKeyChecking=accept-new $host sh -c $cmd
+}
+
+expect {
+  "(yes/no)" { send "yes\r"; exp_continue }
+  -re "(?i)password:" { send "$password\r" }
+  timeout { puts "SSH timeout"; exit 1 }
+}
+
+if {[info exists env(SSH_SCRIPT)]} {
+  set fp [open $env(SSH_SCRIPT) r]
+  send [read $fp]
+  close $fp
+  send "\x04"
+}
+
+expect {
+  eof { }
+  timeout { }
+}
+catch wait result
+set code [lindex $result 3]
+if {$code == ""} { set code 0 }
+exit $code

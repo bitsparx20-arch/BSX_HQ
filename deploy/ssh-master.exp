@@ -1,0 +1,14 @@
+#!/usr/bin/expect -f
+set timeout 60
+set password $env(SSHPASS)
+set host $env(SSH_HOST)
+set control $env(SSH_CONTROL)
+
+spawn ssh -M -S $control -o ControlPersist=600 -o StrictHostKeyChecking=accept-new $host true
+expect {
+  "(yes/no)" { send "yes\r"; exp_continue }
+  -re "(?i)password:" { send "$password\r" }
+  timeout { exit 1 }
+}
+expect eof
+exit 0

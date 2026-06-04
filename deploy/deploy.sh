@@ -22,17 +22,10 @@ ssh "${SSH_OPTS[@]}" "$SERVER" 'bash -s' < "$ROOT/deploy/scripts/clean-server.sh
 echo "==> Installing dependencies..."
 ssh "${SSH_OPTS[@]}" "$SERVER" 'bash -s' < "$ROOT/deploy/scripts/install-deps.sh"
 
-echo "==> Syncing application..."
-ssh "${SSH_OPTS[@]}" "$SERVER" "mkdir -p ${APP_DIR}"
-rsync -avz --delete \
-  --exclude node_modules \
-  --exclude frontend/node_modules \
-  --exclude backend/.venv \
-  --exclude frontend/build \
-  --exclude .git \
-  --exclude 'backend/.env' \
-  --exclude '.DS_Store' \
-  "$ROOT/" "${SERVER}:${APP_DIR}/"
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/bitsparx20-arch/BSX_HQ.git}"
+
+echo "==> Cloning from GitHub (${GITHUB_REPO})..."
+ssh "${SSH_OPTS[@]}" "$SERVER" "mkdir -p ${APP_DIR} && if [ -d ${APP_DIR}/.git ]; then cd ${APP_DIR} && git fetch origin && git reset --hard origin/main; else git clone ${GITHUB_REPO} ${APP_DIR}; fi"
 
 if [[ -f "$ROOT/backend/.env" ]]; then
   echo "==> Uploading backend/.env to /etc/bitsparx-hq.env..."

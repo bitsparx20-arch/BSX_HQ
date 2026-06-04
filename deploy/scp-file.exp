@@ -1,0 +1,20 @@
+#!/usr/bin/expect -f
+set timeout 600
+set password $env(SSHPASS)
+set host $env(SSH_HOST)
+set local $env(SCP_LOCAL)
+set remote $env(SCP_REMOTE)
+
+if {[info exists env(SSH_CONTROL)]} {
+  spawn scp -o ControlPath=$env(SSH_CONTROL) -o StrictHostKeyChecking=no $local $host:$remote
+} else {
+  spawn scp -o StrictHostKeyChecking=accept-new $local $host:$remote
+}
+expect {
+  "(yes/no)" { send "yes\r"; exp_continue }
+  -re "(?i)password:" { send "$password\r" }
+  timeout { exit 1 }
+}
+expect eof
+catch wait result
+exit [lindex $result 3]

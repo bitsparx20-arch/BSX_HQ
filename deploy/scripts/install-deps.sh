@@ -4,6 +4,20 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+wait_for_apt() {
+  for i in $(seq 1 60); do
+    if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+       && ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "Waiting for apt lock (${i}/60)..."
+    sleep 5
+  done
+  echo "apt lock timeout" >&2
+  return 1
+}
+
+wait_for_apt
 apt-get update -qq
 apt-get install -y -qq \
   ca-certificates curl git nginx python3 python3-venv python3-pip \

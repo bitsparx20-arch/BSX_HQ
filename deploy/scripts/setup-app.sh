@@ -4,6 +4,15 @@ set -euo pipefail
 
 APP_DIR=/opt/bitsparx-hq
 PUBLIC_URL="${PUBLIC_URL:-http://147.93.104.138}"
+APP_DOMAIN="${APP_DOMAIN:-}"
+
+nginx_server_names() {
+  local names="147.93.104.138 _"
+  if [[ -n "$APP_DOMAIN" ]]; then
+    names="147.93.104.138 ${APP_DOMAIN} www.${APP_DOMAIN}"
+  fi
+  echo "$names"
+}
 
 cd "$APP_DIR"
 
@@ -30,7 +39,8 @@ yarn install --frozen-lockfile 2>/dev/null || yarn install
 yarn build
 
 echo "==> Nginx + systemd..."
-cp "$APP_DIR/deploy/nginx/bitsparx-hq.conf" /etc/nginx/sites-available/bitsparx-hq
+sed "s|__SERVER_NAMES__|$(nginx_server_names)|" \
+  "$APP_DIR/deploy/nginx/bitsparx-hq.conf" > /etc/nginx/sites-available/bitsparx-hq
 ln -sf /etc/nginx/sites-available/bitsparx-hq /etc/nginx/sites-enabled/bitsparx-hq
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
