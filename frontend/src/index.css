@@ -1,0 +1,219 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+@import url('https://cdn.jsdelivr.net/npm/react-big-calendar@1.13.1/lib/css/react-big-calendar.css');
+
+:root {
+  --bx-bg: #FFFFFF;
+  --bx-bg-2: #F7F8FA;
+  --bx-bg-3: #F1F5F9;
+  --bx-card: #FFFFFF;
+  --bx-text: #0F172A;
+  --bx-text-2: #475569;
+  --bx-text-3: #94A3B8;
+  --bx-brand: #2453E5;
+  --bx-brand-hover: #1A45CC;
+  --bx-brand-soft: #EEF2FF;
+  --bx-accent: #FF3B30;
+  --bx-warning: #F59E0B;
+  --bx-success: #10B981;
+  --bx-border: #E5E7EB;
+  --bx-border-strong: #D1D5DB;
+}
+
+.dark {
+  --bx-bg: #0B1220;
+  --bx-bg-2: #050912;
+  --bx-bg-3: #0F172A;
+  --bx-card: #111827;
+  --bx-text: #F1F5F9;
+  --bx-text-2: #94A3B8;
+  --bx-text-3: #64748B;
+  --bx-brand: #6080FF;
+  --bx-brand-hover: #4F70F0;
+  --bx-brand-soft: rgba(96, 128, 255, 0.12);
+  --bx-accent: #FF6B61;
+  --bx-warning: #FBBF24;
+  --bx-success: #34D399;
+  --bx-border: #1F2937;
+  --bx-border-strong: #374151;
+}
+
+body {
+  margin: 0;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bx-bg-2);
+  color: var(--bx-text);
+  font-feature-settings: "ss01" on, "cv11" on;
+}
+
+.bx-heading {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--bx-text);
+}
+
+.bx-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: -0.01em;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--bx-border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--bx-text-3); }
+::-webkit-scrollbar-track { background: transparent; }
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 8%;
+    --primary: 226 78% 51%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 226 78% 51%;
+    --chart-1: 226 78% 51%;
+    --chart-2: 199 89% 48%;
+    --chart-3: 160 84% 39%;
+    --chart-4: 24 95% 53%;
+    --chart-5: 280 65% 60%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 222 39% 7%;
+    --foreground: 210 20% 95%;
+    --card: 222 30% 11%;
+    --card-foreground: 210 20% 95%;
+    --popover: 222 30% 11%;
+    --popover-foreground: 210 20% 95%;
+    --primary: 224 80% 65%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 19% 18%;
+    --secondary-foreground: 210 20% 95%;
+    --muted: 217 19% 18%;
+    --muted-foreground: 215 16% 65%;
+    --accent: 217 19% 18%;
+    --accent-foreground: 210 20% 95%;
+    --destructive: 0 75% 56%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 19% 20%;
+    --input: 217 19% 20%;
+    --ring: 224 80% 65%;
+    --chart-1: 224 80% 65%;
+    --chart-2: 199 80% 60%;
+    --chart-3: 160 80% 55%;
+    --chart-4: 24 95% 60%;
+    --chart-5: 280 75% 70%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+
+.bx-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--bx-text-2);
+  font-weight: 500;
+  font-size: 13.5px;
+  transition: all 180ms ease;
+}
+.bx-nav-item:hover { background: var(--bx-bg-3); color: var(--bx-text); }
+.bx-nav-item.active {
+  background: var(--bx-brand-soft);
+  color: var(--bx-brand);
+  font-weight: 600;
+}
+.bx-nav-item.active svg { color: var(--bx-brand); }
+
+.bx-kpi {
+  background: var(--bx-card);
+  border: 1px solid var(--bx-border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+.bx-kpi:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+  border-color: var(--bx-border-strong);
+}
+.dark .bx-kpi:hover { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3); }
+
+/* Kanban */
+.kanban-col {
+  background: var(--bx-bg-3);
+  border: 1px solid var(--bx-border);
+  border-radius: 12px;
+  min-height: 480px;
+  display: flex;
+  flex-direction: column;
+}
+.kanban-col.drop-over { border-color: var(--bx-brand); background: var(--bx-brand-soft); }
+.kanban-card {
+  background: var(--bx-card);
+  border: 1px solid var(--bx-border);
+  border-radius: 10px;
+  padding: 12px;
+  cursor: grab;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+.kanban-card:hover { border-color: var(--bx-brand); box-shadow: 0 4px 14px rgba(36, 83, 229, 0.12); }
+.kanban-card.dragging { opacity: 0.4; cursor: grabbing; }
+
+/* react-big-calendar overrides */
+.rbc-calendar { font-family: 'Plus Jakarta Sans', sans-serif; color: var(--bx-text); background: var(--bx-card); }
+.rbc-toolbar button { color: var(--bx-text-2) !important; border-color: var(--bx-border) !important; font-weight: 500; background: transparent !important; }
+.rbc-toolbar button:hover { background: var(--bx-bg-3) !important; }
+.rbc-toolbar button.rbc-active { background: var(--bx-brand) !important; color: #fff !important; border-color: var(--bx-brand) !important; }
+.rbc-event { background: var(--bx-brand) !important; border: none !important; border-radius: 6px !important; font-size: 12px !important; font-weight: 500; padding: 2px 6px !important; color: #fff !important; }
+.rbc-today { background: var(--bx-brand-soft) !important; }
+.rbc-header { padding: 8px 4px !important; font-weight: 600 !important; font-size: 11px !important; text-transform: uppercase; letter-spacing: 0.08em; color: var(--bx-text-2) !important; border-color: var(--bx-border) !important; background: var(--bx-bg-3); }
+.rbc-month-view, .rbc-time-view, .rbc-agenda-view { border-color: var(--bx-border) !important; border-radius: 8px; overflow: hidden; }
+.rbc-day-bg + .rbc-day-bg, .rbc-month-row + .rbc-month-row, .rbc-day-slot, .rbc-time-content > * + * { border-color: var(--bx-border) !important; }
+.rbc-off-range-bg { background: var(--bx-bg-2) !important; }
+.dark .rbc-month-view, .dark .rbc-time-view { background: var(--bx-card); }
+.dark .rbc-off-range, .dark .rbc-button-link { color: var(--bx-text-3); }
+.dark .rbc-toolbar { color: var(--bx-text); }
+.dark .rbc-agenda-table, .dark .rbc-agenda-view table.rbc-agenda-table tbody > tr > td { color: var(--bx-text) !important; border-color: var(--bx-border) !important; }
+.rbc-button-link { color: var(--bx-text); }
+
+/* Leaflet popup */
+.leaflet-container { font-family: 'Plus Jakarta Sans', sans-serif !important; background: var(--bx-bg-3); }
+.leaflet-popup-content-wrapper { border-radius: 8px !important; background: var(--bx-card) !important; color: var(--bx-text) !important; }
+.leaflet-popup-tip { background: var(--bx-card) !important; }
+.dark .leaflet-tile { filter: brightness(0.7) invert(0.95) contrast(0.9) hue-rotate(180deg) saturate(0.4); }
+.dark .leaflet-control-attribution { background: rgba(17, 24, 39, 0.85) !important; color: var(--bx-text-3) !important; }
+.dark .leaflet-bar a { background: var(--bx-card) !important; color: var(--bx-text) !important; border-color: var(--bx-border) !important; }
+
+/* Mobile sidebar drawer */
+.bx-sidebar-overlay { animation: bx-fade-in 200ms ease; }
+.bx-sidebar-drawer { animation: bx-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes bx-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bx-slide-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+
+[data-debug-wrapper="true"] { display: contents !important; }

@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 3 frontend testing complete. Verified dark-mode toggle + localStorage persistence, 4 Projects tabs, Projects kanban (planning/in_progress/on_hold/completed) and Tasks kanban (todo/in_progress/review/done) columns render. Drag-and-drop on DESKTOP works for both Projects and Tasks: cards moved visually, persisted via PUT, and stayed after reload. Meetings calendar now lands on Feb 2026 and renders all 3 seed events (Aurora Sprint Review, Helix Discovery Call, Monthly All Hands). Chat widget panel renders cleanly in dark mode. Mobile @ 414x800: login no overflow, sidebar hidden, hamburger visible, drawer opens & closes on nav, KPIs stack to 2 columns, user-menu text hidden (avatar only), kanban columns stack to 1 column. Mobile drag-and-drop could NOT be confirmed working (see issues). Backend spot-checked: PUT /api/projects/{id} & PUT /api/tasks/{id} both return 200 and persist status changes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Initial theme-toggle click after login", "issue": "First click on [data-testid=theme-toggle] immediately after login (within ~3s) is intercepted by the 'Welcome to Bitsparx HQ' sonner toast that sits top-right and overlaps the toggle button. Toggle works fine once the toast auto-dismisses (after ~4s) or via JS click(). Recommend either lowering toast z-index, repositioning toast to bottom-right, or shortening toast duration.", "selector": "[data-testid='theme-toggle']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Mobile kanban drag-and-drop (Projects @ 414x800)", "issue": "Could not move a card between columns on mobile via simulated pointer events. Columns are stacked vertically so the drag has to traverse a long scroll distance; with dnd-kit PointerSensor (distance:6) the drop target may not be detected because the document scrolls instead of the drag tracking. Consider enabling dnd-kit's TouchSensor with delay+tolerance (delay:150, tolerance:5) alongside PointerSensor for mobile, and/or using AutoScroll plugin so the page auto-scrolls while a card is being dragged. Desktop drag works perfectly.", "affected_selectors": ["[data-testid='kanban-card-...']", "[data-testid='kanban-col-...']"]}
+    ],
+    "design_issues": [
+      {"screen": "Projects (mobile)", "issues": ["Tab strip (Projects·Board / Projects·List / Tasks·Board / Tasks·List) wraps onto 2 rows at 414px width. Acceptable but consider horizontal scroll or shorter labels for cleaner mobile UX."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter2.py",
+    "/app/backend/tests/backend_test.py"
+  ],
+  "action_items": [
+    "Optional: reposition or shorten the post-login welcome toast so it does not overlap the theme-toggle button during its 4s lifetime.",
+    "Optional but recommended: add TouchSensor (delay:150, tolerance:5) and dnd-kit autoScroll to KanbanBoard so mobile users can drag cards between stacked columns smoothly.",
+    "Optional: make the Projects tab strip horizontally scrollable on mobile so all 4 tabs stay on a single row."
+  ],
+  "critical_code_review_comments": [
+    "KanbanBoard.js: on PUT failure, setItems(items) restores from the *captured closure* variable which is the pre-optimistic snapshot — correct, but consider also re-fetching from server to stay in sync with any other in-flight changes.",
+    "KanbanBoard.js currently sends the entire item back in PUT body. If backend validates extra fields strictly, sending only the changed status would be safer and cheaper.",
+    "Layout.js mobile drawer uses fixed inset + z-50 but the overlay is only z-40; if any modal/toast renders above z-50 it can block drawer close-on-outside-click — minor.",
+    "ThemeContext sets root.classList synchronously on mount based on localStorage — good, but the initial server-rendered HTML body still uses light-mode CSS variables, which can cause a brief flash of light on first paint when bx_theme=dark. Consider an inline pre-React script in index.html to apply the .dark class before React mounts.",
+    "Meetings.js calendar correctly maps start_at strings to Date now — verified 3 events appear; the iter-2 issue is resolved.",
+    "Sidebar nav-projects test-id exists in BOTH desktop sidebar (display:none on mobile) and mobile drawer — scoping selectors with [data-testid='mobile-drawer'] [data-testid='nav-projects'] is required for mobile tests."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_3.json"
+  ],
+  "success_rate": {"backend": "100% (spot-checked PUT projects/tasks)", "frontend": "~92% (desktop 100%, mobile 90% — drag unverified)"},
+  "test_credentials": "Admin admin@bitsparx.com/Admin@123 (used for all tests).",
+  "seed_data_creation": "None. Modified Pixelnova Brand Site status temporarily during backend curl test, reverted to 'completed' afterwards. Dragged kanban cards during UI tests — left in moved positions (e.g., one project moved planning -> on_hold, one task moved todo -> review). Main agent can leave or restore as desired.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Theme toggle works but the post-login welcome toast (sonner, top-right) overlays it for ~4s — wait for toast or use page.evaluate('document.querySelector(...).click()'). Mobile drawer has duplicate data-testid='nav-projects' (one in hidden desktop sidebar, one in drawer); scope selectors via [data-testid='mobile-drawer']. dnd-kit drag-and-drop works on desktop with mouse.move>=6px then drop; on mobile the test could not confirm it, likely needs TouchSensor + autoScroll in KanbanBoard.js. Backend PUT /api/projects/{id} and /api/tasks/{id} accept full item body with updated status and return 200.",
+  "rca of the issue": "Mobile drag failure RCA: dnd-kit's PointerSensor uses pointermove + pointerdown which Playwright's page.mouse.* emits. However on mobile-stacked layout the source card and target column are >500px apart vertically; pointer events outside the viewport are not received by columns that haven't been scrolled into view. dnd-kit ships an `autoScroll` option that scrolls the closest scrollable ancestor while dragging — it should be enabled (it's on by default), but our DndContext does not configure modifiers/autoScroll for the document-level scrolling. Suggested fix: add TouchSensor with `{ activationConstraint: { delay: 150, tolerance: 5 } }` alongside PointerSensor and verify autoScroll triggers on body scroll (may need to wrap kanban in an overflow container)."
+}

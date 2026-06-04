@@ -1,0 +1,93 @@
+{
+  "theme": "light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "design_philosophy": "Objective, rigid, and highly functional. The dashboard must act as a 'Control Room' for Bitsparx Tech, maximizing data density through modular progressive disclosure. High contrast text, minimal decoration, and grid-based structural layouts.",
+  "typography": {
+    "headings": {
+      "font_family": "Cabinet Grotesk",
+      "weights": ["700", "800", "900"],
+      "styling": "tracking-tight, leading-none, font-bold, do not center unless necessary"
+    },
+    "body": {
+      "font_family": "Satoshi",
+      "weights": ["400", "500", "600"],
+      "styling": "tracking-normal, leading-relaxed"
+    },
+    "monospaced": {
+      "font_family": "IBM Plex Mono",
+      "usage": "Data tables, KPI metrics, timers, SLA badges, and IDs."
+    }
+  },
+  "color_palette": {
+    "background": {
+      "primary": "#FFFFFF",
+      "secondary": "#F8FAFC"
+    },
+    "text": {
+      "primary": "#020617",
+      "secondary": "#475569",
+      "muted": "#94A3B8"
+    },
+    "brand": {
+      "primary": "#003EDB",
+      "primary_hover": "#002EB3",
+      "accent": "#FF3B30",
+      "warning": "#FFCC00",
+      "success": "#00C752"
+    },
+    "border": "#E2E8F0",
+    "surface": "#FFFFFF"
+  },
+  "layout_and_spacing": {
+    "container": "w-full mx-auto",
+    "dashboard_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "spacing_scale": "dense padding for widgets (p-4 or p-6), generous margins between sections",
+    "surface_strategy": "Grid Borders: Expose the skeleton. Use border-collapse style layouts with sharp 1px borders. Minimal rounded corners (rounded-sm or rounded-none)."
+  },
+  "components": {
+    "cards": "Flat background, 1px subtle border, no shadow by default. Hover: slight shadow-sm, -translate-y-[1px].",
+    "buttons": "Sharp edges (rounded-sm). Primary buttons use brand color with white text. High contrast focus states (focus:ring-2 focus:ring-blue-300).",
+    "tables": "Dense layout, sticky headers. Use pure white background. Highlight rows on hover with #F1F5F9. Right-align numeric columns.",
+    "badges": "For SLA timers, statuses. Tiny text (text-xs), uppercase, wide tracking (tracking-widest). High contrast text."
+  },
+  "navigation": {
+    "sidebar": "Fixed left sidebar. Stark White (#FFFFFF) with a hard right border (#E2E8F0) to keep the Swiss aesthetic pure.",
+    "header": "Sticky top nav. Solid white background with a 1px bottom border. Include user profile, global search, and WhatsApp notification center."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1709626011485-6fe000ea2dbc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMHRlY2glMjBnZW9tZXRyaWMlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4MDU0MzQwNHww&ixlib=rb-4.1.0&q=85",
+      "category": "background",
+      "description": "Abstract black and blue geometric background to be used for the Login page split screen."
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1621831337128-35676ca30868?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjB0ZWNoJTIwb2ZmaWNlJTIwYnVpbGRpbmclMjBleHRlcmlvcnxlbnwwfHx8fDE3ODA1NDMzOTR8MA&ixlib=rb-4.1.0&q=85",
+      "category": "hero",
+      "description": "Tech office building exterior, can be used for company profile section or login visual."
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1576267423048-15c0040fec78?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBkaXZlcnNlJTIwdGVhbSUyMG9mZmljZXxlbnwwfHx8fDE3ODA1NDMzOTR8MA&ixlib=rb-4.1.0&q=85",
+      "category": "avatar",
+      "description": "Diverse team placeholder image. Useful for Employee profiles or HR module dashboard."
+    }
+  ],
+  "icons_and_assets": {
+    "library": "@phosphor-icons/react",
+    "instructions": "Install using 'yarn add @phosphor-icons/react'. Use Phosphor Icons for a dense, high-end technical aesthetic. Use 'regular' or 'bold' weights."
+  },
+  "motion_and_interactions": {
+    "hover_states": "All interactive elements must change state visually. Text color must explicitly change on hover (e.g., hover:bg-slate-100 hover:text-blue-600).",
+    "transitions": "Use short, crisp transitions. transition-all duration-200 ease-in-out."
+  },
+  "instructions_to_main_agent": [
+    "Build a 12-module dashboard structure: Attendance, Project Finance & Expenses, Projects, Employees, Meetings & Calendar, Client Visit/Location, Asset Master, AMC & Maintenance, Helpdesk/Tickets, Document Manager, Reports & Analytics, Client CRM.",
+    "Implement 'Progressive Disclosure'. Dashboard should have a top-left 'North Star' KPI, top row for supporting KPIs, middle area for charts, and lower area for data tables.",
+    "Do NOT use 'Inter' font. Use 'Cabinet Grotesk' for headings and 'Satoshi' for body.",
+    "No generic SaaS purple/teal gradients. Stick to the high-contrast palette: Stark White, 10% Grey, deep piercing Blue (#003EDB) for primary actions.",
+    "Use pure HTML+Tailwind for foundational structural layouts (sidebar, topbar, bento grids). Rely on customized Shadcn components for complex interactions (Tables, Dropdowns, Datepickers).",
+    "Do NOT use heavy shadows. Use 1px borders (border-slate-200) to separate components.",
+    "Ensure all critical actionable elements have 'data-testid' attributes (e.g., 'data-testid=\"login-button\"').",
+    "The UI should feel dense but highly readable (like a Bloomberg terminal or high-end fintech app).",
+    "Include a mock WhatsApp Notification icon in the header that displays a drop-down of recent WhatsApp message statuses via SpringEdge."
+  ]
+}

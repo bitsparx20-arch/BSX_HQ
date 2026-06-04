@@ -1,0 +1,78 @@
+import React from "react";
+import "@/App.css";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import Layout from "@/components/Layout";
+import Login from "@/pages/Login";
+import Dashboard from "@/pages/Dashboard";
+import Attendance from "@/pages/Attendance";
+import Projects from "@/pages/Projects";
+import Finance from "@/pages/Finance";
+import Employees from "@/pages/Employees";
+import Meetings from "@/pages/Meetings";
+import ClientVisits from "@/pages/ClientVisits";
+import Assets from "@/pages/Assets";
+import AMC from "@/pages/AMC";
+import Helpdesk from "@/pages/Helpdesk";
+import Documents from "@/pages/Documents";
+import Reports from "@/pages/Reports";
+import CRM from "@/pages/CRM";
+import Notifications from "@/pages/Notifications";
+
+const ProtectedRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bx-bg-2)]">
+        <div className="text-[var(--bx-text-3)] bx-mono text-sm">Loading Bitsparx HQ…</div>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+};
+
+function App() {
+  return (
+    <div className="App">
+      <ThemeProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Toaster position="bottom-right" richColors duration={3000} />
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <Layout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="attendance" element={<Attendance />} />
+                <Route path="projects" element={<Projects />} />
+                <Route path="finance" element={<Finance />} />
+                <Route path="employees" element={<Employees />} />
+                <Route path="meetings" element={<Meetings />} />
+                <Route path="visits" element={<ClientVisits />} />
+                <Route path="assets" element={<Assets />} />
+                <Route path="amc" element={<AMC />} />
+                <Route path="helpdesk" element={<Helpdesk />} />
+                <Route path="documents" element={<Documents />} />
+                <Route path="reports" element={<Reports />} />
+                <Route path="crm" element={<CRM />} />
+                <Route path="notifications" element={<Notifications />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </ThemeProvider>
+    </div>
+  );
+}
+
+export default App;
