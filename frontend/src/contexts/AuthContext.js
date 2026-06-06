@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
       setUser(data.user);
       return { ok: true };
     } catch (e) {
-      return { ok: false, error: formatApiError(e.response?.data?.detail) };
+      return { ok: false, error: formatApiError(e.response?.data?.detail, e) };
     }
   };
 

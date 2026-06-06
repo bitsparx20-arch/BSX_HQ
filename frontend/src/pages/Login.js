@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import PasswordInput from "@/components/PasswordInput";
 import { Label } from "@/components/ui/label";
 import { ArrowRight } from "@phosphor-icons/react";
 import { toast } from "sonner";
@@ -56,10 +57,10 @@ export default function Login() {
               Enterprise Operating System · v1.1
             </div>
             <h1 className="bx-heading !text-white text-4xl xl:text-5xl leading-[1.1] max-w-md font-bold tracking-tight">
-              The single console for everything your company runs on.
+              The single console for everything Bitsparx runs on.
             </h1>
             <p className="text-slate-300 max-w-md text-sm leading-relaxed">
-              Attendance, projects, finance, CRM, assets, AMC, helpdesk — wired to WhatsApp via SpringEdge and powered by an AI assistant.
+              Bitsparx HQ brings attendance, projects, finance, CRM, assets, AMC, and helpdesk into one place — wired to WhatsApp via SpringEdge and powered by an AI assistant.
             </p>
 
             <div className="grid grid-cols-3 gap-4 pt-4 border-t border-white/10 max-w-md">
@@ -81,19 +82,19 @@ export default function Login() {
       </div>
 
       {/* Right — form */}
-      <div className="flex items-center justify-center p-8">
+      <div className="bx-light-surface flex items-center justify-center p-8 bg-white">
         <div className="w-full max-w-sm">
           <div className="lg:hidden flex items-center gap-2.5 mb-8">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#2453E5] to-[#1A45CC] grid place-items-center text-white font-bold text-xl">B</div>
             <div>
-              <div className="font-bold text-base">Bitsparx HQ</div>
-              <div className="text-[10px] uppercase tracking-widest text-slate-500">Control Room</div>
+              <div className="font-bold text-base text-slate-900">Bitsparx HQ</div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-600">Control Room</div>
             </div>
           </div>
 
-          <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500 mb-2 font-semibold">Sign in</div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-slate-600 mb-2 font-semibold">Sign in</div>
           <h2 className="bx-heading text-3xl mb-2 tracking-tight font-bold text-slate-900">Welcome back.</h2>
-          <p className="text-sm text-slate-500 mb-8">Sign in to your workspace to continue.</p>
+          <p className="text-sm text-slate-600 mb-8">Sign in to Bitsparx HQ to continue.</p>
 
           <form onSubmit={onSubmit} className="space-y-4" data-testid="login-form">
             <div>
@@ -108,11 +109,13 @@ export default function Login() {
             </div>
             <div>
               <Label className="text-xs font-semibold text-slate-700 mb-1.5 block">Password</Label>
-              <Input
-                type="password" required value={password}
+              <PasswordInput
+                required
+                value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="h-11 rounded-lg border-slate-300 focus:border-[#2453E5] focus:ring-2 focus:ring-[#2453E5]/20"
+                placeholder="Enter your password"
+                showCopy={false}
+                inputClassName="h-11 rounded-lg border-slate-300 focus:border-[#2453E5] focus:ring-2 focus:ring-[#2453E5]/20"
                 data-testid="login-password"
               />
             </div>

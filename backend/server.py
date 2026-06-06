@@ -10,6 +10,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import re
 import uuid
 import logging
 import secrets
@@ -21,6 +22,7 @@ import jwt
 import httpx
 from bedrock_llm import bedrock_chat
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status
+from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
@@ -28,13 +30,6 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict
 # ──────────────────────────────────────────────────────────────────────────────
 # Config & DB
 # ──────────────────────────────────────────────────────────────────────────────
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
-
-JWT_SECRET = os.environ["JWT_SECRET"]
-JWT_ALGORITHM = "HS256"
-
 def _env_bool(name: str, default: bool = False) -> bool:
     return os.environ.get(name, str(default).lower()).strip().lower() in ("1", "true", "yes")
 
@@ -42,6 +37,31 @@ COOKIE_SECURE = _env_bool("COOKIE_SECURE", default=False)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("bitsparx")
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    raise RuntimeError(
+        f"Missing required environment variable: {name}. "
+        "Create backend/.env (for local dev) or export the variable before starting the server."
+    )
+
+mongo_url = os.environ.get("MONGO_URL", "").strip() or "mongodb://127.0.0.1:27017"
+db_name = os.environ.get("DB_NAME", "").strip() or "bitsparx_hq"
+
+client = AsyncIOMotorClient(mongo_url)
+db = client[db_name]
+
+JWT_ALGORITHM = "HS256"
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    if COOKIE_SECURE:
+        # In production (secure cookies), require an explicit secret.
+        JWT_SECRET = _required_env("JWT_SECRET")
+    else:
+        JWT_SECRET = "dev-insecure-jwt-secret"
+        log.warning("JWT_SECRET not set; using insecure dev default. Set JWT_SECRET in backend/.env.")
 
 app = FastAPI(title="Bitsparx HQ API")
 api = APIRouter(prefix="/api")
@@ -290,22 +310,420 @@ def make_crud(path: str, collection: str, notify_event: Optional[str] = None,
         return {"ok": True}
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Employees (login account + directory)
+# ──────────────────────────────────────────────────────────────────────────────
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$", re.IGNORECASE)
+
+def normalize_phone(raw: Optional[str]) -> str:
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) == 10 and digits[0] in "6789":
+        return f"91{digits}"
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
+        return digits
+    raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile (e.g. 9876543210 or +91 9876543210)")
+
+def normalize_email(raw: Optional[str]) -> str:
+    email = (raw or "").strip().lower()
+    if not email or not EMAIL_PATTERN.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    return email
+
+def validate_employee_contact(doc: dict) -> dict:
+    if not (doc.get("phone") or "").strip():
+        raise HTTPException(status_code=400, detail="Phone number is required")
+    doc["email"] = normalize_email(doc.get("email"))
+    doc["phone"] = normalize_phone(doc.get("phone"))
+    return doc
+
+def designation_to_role(designation: Optional[str]) -> str:
+    key = (designation or "").strip().lower()
+    if key == "ceo":
+        return "admin"
+    if key == "manager":
+        return "manager"
+    return "employee"
+
+async def sync_employee_user(employee: dict, password: Optional[str] = None):
+    email = (employee.get("email") or "").lower().strip()
+    if not email:
+        return
+    user_fields = {
+        "name": employee.get("name"),
+        "role": designation_to_role(employee.get("designation")),
+        "phone": employee.get("phone"),
+        "department": employee.get("department"),
+    }
+    existing = await db.users.find_one({"email": email})
+    if password:
+        user_fields["password_hash"] = hash_password(password)
+    if existing:
+        await db.users.update_one({"email": email}, {"$set": user_fields})
+    elif password:
+        await db.users.insert_one({
+            "id": new_id(),
+            "email": email,
+            "created_at": now_utc(),
+            **user_fields,
+        })
+
+def _employee_notify(doc: dict):
+    return f"Welcome to Bitsparx HQ, {doc.get('name', 'colleague')}! Your account is being set up."
+
+@api.get("/employees", name="list_employees")
+async def list_employees(user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    items = await db.employees.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return items
+
+@api.post("/employees", name="create_employees")
+async def create_employee(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    doc = body.model_dump()
+    password = (doc.pop("password", None) or "").strip() or None
+    if not password:
+        raise HTTPException(status_code=400, detail="Password is required")
+    validate_employee_contact(doc)
+    doc["id"] = new_id()
+    doc["created_at"] = now_utc()
+    doc["created_by"] = user["id"]
+    await db.employees.insert_one(doc.copy())
+    await sync_employee_user(doc, password)
+    try:
+        phone = doc.get("phone") or os.environ.get("ADMIN_PHONE", "919999999999")
+        await wa.send(phone, _employee_notify(doc), event="employee_added", meta={"id": doc["id"], "collection": "employees"})
+    except Exception:
+        log.exception("notify failed")
+    return strip_id(doc)
+
+@api.get("/employees/{item_id}", name="get_employees")
+async def get_employee(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.employees.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return doc
+
+@api.put("/employees/{item_id}", name="update_employees")
+async def update_employee(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    updates = body.model_dump()
+    updates.pop("id", None)
+    updates.pop("created_at", None)
+    password = (updates.pop("password", None) or "").strip() or None
+    validate_employee_contact(updates)
+    updates["updated_at"] = now_utc()
+    result = await db.employees.update_one({"id": item_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.employees.find_one({"id": item_id}, {"_id": 0})
+    await sync_employee_user(doc, password)
+    return doc
+
+@api.delete("/employees/{item_id}", name="delete_employees")
+async def delete_employee(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
+    result = await db.employees.delete_one({"id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Module CRUDs (12 modules)
 # ──────────────────────────────────────────────────────────────────────────────
-make_crud("employees", "employees",
-          notify_event="employee_added",
-          notify_template=lambda d: f"Welcome to Bitsparx HQ, {d.get('name','colleague')}! Your account is being set up.")
+def _sanitize_project_for_role(doc: dict, user: dict) -> dict:
+    out = dict(doc)
+    if user["role"] != "admin":
+        out.pop("budget", None)
+        out.pop("budget_set", None)
+        out.pop("budget_set_by", None)
+        out.pop("created_by_role", None)
+    return out
 
-make_crud("projects", "projects",
-          notify_event="project_created",
-          notify_template=lambda d: f"New project assigned: {d.get('name','-')}. Deadline: {d.get('deadline','TBD')}.")
+@api.get("/projects", name="list_projects")
+async def list_projects(user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    items = await db.projects.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [_sanitize_project_for_role(i, user) for i in items]
+
+@api.post("/projects", name="create_projects")
+async def create_project(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    doc = body.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_utc()
+    doc["created_by"] = user["id"]
+    doc["created_by_role"] = user["role"]
+    doc["created_by_name"] = user.get("name") or user.get("email")
+    if user["role"] != "admin":
+        doc.pop("budget", None)
+        doc["budget"] = None
+        doc["budget_set"] = False
+    else:
+        budget = doc.get("budget")
+        if budget is not None and budget != "":
+            doc["budget"] = float(budget)
+            doc["budget_set"] = True
+            doc["budget_set_by"] = user["id"]
+        else:
+            doc["budget"] = None
+            doc["budget_set"] = False
+    await db.projects.insert_one(doc.copy())
+    try:
+        phone = doc.get("phone") or doc.get("contact_phone") or os.environ.get("ADMIN_PHONE", "919999999999")
+        await wa.send(phone, f"New project assigned: {doc.get('name', '-')}. Deadline: {doc.get('deadline', 'TBD')}.",
+                      event="project_created", meta={"id": doc["id"], "collection": "projects"})
+    except Exception:
+        log.exception("notify failed")
+    return strip_id(_sanitize_project_for_role(doc, user))
+
+@api.get("/projects/{item_id}", name="get_projects")
+async def get_project(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return _sanitize_project_for_role(doc, user)
+
+@api.put("/projects/{item_id}", name="update_projects")
+async def update_project(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    updates = body.model_dump()
+    updates.pop("id", None)
+    updates.pop("created_at", None)
+    updates.pop("created_by", None)
+    updates.pop("created_by_role", None)
+    updates.pop("created_by_name", None)
+    updates.pop("budget_set", None)
+    updates.pop("budget_set_by", None)
+    if user["role"] != "admin":
+        updates.pop("budget", None)
+    elif "budget" in updates:
+        updates.pop("budget", None)
+    updates["updated_at"] = now_utc()
+    result = await db.projects.update_one({"id": item_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    return _sanitize_project_for_role(doc, user)
+
+class ProjectBudgetInput(BaseModel):
+    budget: float
+
+@api.put("/projects/{item_id}/budget", name="set_project_budget")
+async def set_project_budget(item_id: str, body: ProjectBudgetInput, user: dict = Depends(require_roles("admin"))):
+    if body.budget <= 0:
+        raise HTTPException(400, "Budget must be greater than zero")
+    result = await db.projects.update_one(
+        {"id": item_id},
+        {"$set": {
+            "budget": float(body.budget),
+            "budget_set": True,
+            "budget_set_by": user["id"],
+            "budget_set_at": now_utc(),
+            "updated_at": now_utc(),
+        }},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    return doc
+
+@api.get("/projects/{item_id}/finance", name="project_finance")
+async def project_finance(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    project = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Not found")
+    name = project.get("name") or ""
+    expenses = await db.expenses.find({"project": name}, {"_id": 0}).to_list(5000)
+    spent = round(sum(float(e.get("amount") or 0) for e in expenses), 2)
+    budget_set = bool(project.get("budget_set") or project.get("budget"))
+    budget = float(project["budget"]) if budget_set and project.get("budget") is not None else None
+    remaining = round((budget or 0) - spent, 2) if budget is not None else None
+    chart = [{"name": "Spent", "value": spent}]
+    if budget is not None:
+        chart = [
+            {"name": "Budget", "value": budget},
+            {"name": "Spent", "value": spent},
+            {"name": "Remaining", "value": max(remaining, 0)},
+        ]
+    return {
+        "project_id": item_id,
+        "project_name": name,
+        "budget": budget,
+        "budget_set": budget_set,
+        "spent": spent,
+        "remaining": remaining,
+        "created_by_role": project.get("created_by_role"),
+        "created_by_name": project.get("created_by_name"),
+        "chart": chart,
+    }
+
+@api.delete("/projects/{item_id}", name="delete_projects")
+async def delete_project(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
+    result = await db.projects.delete_one({"id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
 
 make_crud("tasks", "tasks",
           notify_event="task_assigned",
           notify_template=lambda d: f"Task '{d.get('title','-')}' assigned to you. Due: {d.get('due_date','TBD')}.")
 
 make_crud("expenses", "expenses")
-make_crud("invoices", "invoices")
+
+def _sanitize_invoice_for_role(doc: dict, user: dict) -> dict:
+    out = dict(doc)
+    if user["role"] != "admin":
+        out.pop("amount", None)
+        out.pop("amount_set", None)
+        out.pop("amount_set_by", None)
+        out.pop("created_by_role", None)
+        out.pop("created_by_name", None)
+    return out
+
+def _invoice_amount_value(inv: dict) -> float:
+    if inv.get("amount_set") or inv.get("amount"):
+        return float(inv.get("amount") or 0)
+    return 0.0
+
+def _escape_pdf_text(s: str) -> str:
+    return str(s).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+def _build_invoice_pdf(invoice: dict) -> bytes:
+    amount_line = f"Amount:      INR {float(invoice.get('amount') or 0):,.2f}"
+    lines = [
+        "Bitsparx HQ",
+        "INVOICE",
+        "",
+        f"Invoice No:  {invoice.get('invoice_no', '-')}",
+        f"Client:      {invoice.get('client', '-')}",
+        f"Issue Date:  {invoice.get('date', '-')}",
+        f"Due Date:    {invoice.get('due_date', '-')}",
+        f"Status:      {invoice.get('status', '-')}",
+        "",
+        amount_line,
+    ]
+    y = 750
+    cmds = ["BT", "/F1 11 Tf", f"50 {y} Td ({_escape_pdf_text(lines[0])}) Tj"]
+    for line in lines[1:]:
+        cmds.append("T*")
+        cmds.append(f"({_escape_pdf_text(line)}) Tj")
+    cmds.append("ET")
+    stream = "\n".join(cmds)
+    stream_bytes = stream.encode("latin-1", errors="replace")
+    parts = [
+        b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n",
+        b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n",
+        b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n",
+        f"4 0 obj<< /Length {len(stream_bytes)} >>stream\n".encode() + stream_bytes + b"\nendstream\nendobj\n",
+        b"5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n",
+    ]
+    pdf = b"%PDF-1.4\n"
+    offsets = [0]
+    for part in parts:
+        offsets.append(len(pdf))
+        pdf += part
+    xref = len(pdf)
+    pdf += f"xref\n0 {len(parts) + 1}\n".encode()
+    pdf += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        pdf += f"{off:010d} 00000 n \n".encode()
+    pdf += f"trailer<< /Size {len(parts) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return pdf
+
+@api.get("/invoices", name="list_invoices")
+async def list_invoices(user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    items = await db.invoices.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [_sanitize_invoice_for_role(i, user) for i in items]
+
+@api.post("/invoices", name="create_invoices")
+async def create_invoice(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    doc = body.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_utc()
+    doc["created_by"] = user["id"]
+    doc["created_by_role"] = user["role"]
+    doc["created_by_name"] = user.get("name") or user.get("email")
+    if user["role"] != "admin":
+        doc.pop("amount", None)
+        doc["amount"] = None
+        doc["amount_set"] = False
+    else:
+        amount = doc.get("amount")
+        if amount is not None and amount != "":
+            doc["amount"] = float(amount)
+            doc["amount_set"] = True
+            doc["amount_set_by"] = user["id"]
+        else:
+            doc["amount"] = None
+            doc["amount_set"] = False
+    await db.invoices.insert_one(doc.copy())
+    return strip_id(_sanitize_invoice_for_role(doc, user))
+
+@api.get("/invoices/{item_id}", name="get_invoices")
+async def get_invoice(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.invoices.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return _sanitize_invoice_for_role(doc, user)
+
+@api.put("/invoices/{item_id}", name="update_invoices")
+async def update_invoice(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    updates = body.model_dump()
+    updates.pop("id", None)
+    updates.pop("created_at", None)
+    updates.pop("created_by", None)
+    updates.pop("created_by_role", None)
+    updates.pop("created_by_name", None)
+    updates.pop("amount_set", None)
+    updates.pop("amount_set_by", None)
+    if user["role"] != "admin":
+        updates.pop("amount", None)
+    elif "amount" in updates:
+        updates.pop("amount", None)
+    updates["updated_at"] = now_utc()
+    result = await db.invoices.update_one({"id": item_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.invoices.find_one({"id": item_id}, {"_id": 0})
+    return _sanitize_invoice_for_role(doc, user)
+
+class InvoiceAmountInput(BaseModel):
+    amount: float
+
+@api.put("/invoices/{item_id}/amount", name="set_invoice_amount")
+async def set_invoice_amount(item_id: str, body: InvoiceAmountInput, user: dict = Depends(require_roles("admin"))):
+    if body.amount <= 0:
+        raise HTTPException(400, "Amount must be greater than zero")
+    result = await db.invoices.update_one(
+        {"id": item_id},
+        {"$set": {
+            "amount": float(body.amount),
+            "amount_set": True,
+            "amount_set_by": user["id"],
+            "amount_set_at": now_utc(),
+            "updated_at": now_utc(),
+        }},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.invoices.find_one({"id": item_id}, {"_id": 0})
+    return doc
+
+@api.get("/invoices/{item_id}/pdf", name="download_invoice_pdf")
+async def download_invoice_pdf(item_id: str, user: dict = Depends(require_roles("admin"))):
+    doc = await db.invoices.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    amount_set = bool(doc.get("amount_set") or doc.get("amount"))
+    if not amount_set:
+        raise HTTPException(400, "Amount not added")
+    pdf_bytes = _build_invoice_pdf(doc)
+    filename = f"{doc.get('invoice_no', 'invoice')}.pdf".replace("/", "-")
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@api.delete("/invoices/{item_id}", name="delete_invoices")
+async def delete_invoice(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
+    result = await db.invoices.delete_one({"id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
 make_crud("meetings", "meetings",
           notify_event="meeting_scheduled",
           notify_template=lambda d: f"Meeting '{d.get('title','-')}' scheduled on {d.get('start_at','TBD')}.")
@@ -324,7 +742,7 @@ make_crud("tickets", "tickets",
           notify_template=lambda d: f"Ticket #{d.get('id','')[:8]}: {d.get('subject','-')} — status: {d.get('status','open')}.")
 
 make_crud("documents", "documents")
-make_crud("clients", "clients")
+make_crud("clients", "clients", list_roles=("admin",), write_roles=("admin",))
 
 # Attendance — special model
 class AttendanceCheckIn(BaseModel):
@@ -425,6 +843,223 @@ async def reject_leave(leave_id: str, user: dict = Depends(require_roles("admin"
                       event="leave_rejection")
     return {"ok": True}
 
+# Assigned daily tasks (CEO assigns → employee inbox)
+ASSIGNED_TASK_STATUSES = ("todo", "in_progress", "review", "done")
+
+class AssignedTaskInput(BaseModel):
+    title: str
+    description: Optional[str] = None
+    assignee_id: str
+    task_date: str
+    status: Optional[str] = "todo"
+    priority: Optional[str] = "medium"
+
+@api.get("/assigned-tasks")
+async def list_assigned_tasks(task_date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {}
+    if user["role"] != "admin":
+        query["assignee_id"] = user["id"]
+    if task_date:
+        query["task_date"] = task_date
+    items = await db.assigned_tasks.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+@api.post("/assigned-tasks")
+async def create_assigned_task(body: AssignedTaskInput, user: dict = Depends(require_roles("admin"))):
+    assignee = await db.users.find_one({"id": body.assignee_id}, {"_id": 0, "password_hash": 0})
+    if not assignee:
+        raise HTTPException(404, "Assignee not found")
+    doc = {
+        "id": new_id(),
+        "title": body.title.strip(),
+        "description": (body.description or "").strip(),
+        "assignee_id": assignee["id"],
+        "assignee_name": assignee.get("name") or assignee.get("email"),
+        "assigned_by": user["id"],
+        "assigned_by_name": user.get("name") or user.get("email"),
+        "task_date": body.task_date,
+        "status": body.status or "todo",
+        "priority": body.priority or "medium",
+        "assignee_seen_at": None,
+        "created_at": now_utc(),
+    }
+    await db.assigned_tasks.insert_one(doc.copy())
+    try:
+        phone = assignee.get("phone") or os.environ.get("ADMIN_PHONE", "919999999999")
+        await wa.send(
+            phone,
+            f"New task for {body.task_date}: {doc['title']}",
+            event="daily_task_assigned",
+            meta={"task_id": doc["id"], "assignee_id": assignee["id"]},
+        )
+    except Exception:
+        log.exception("daily task notify failed")
+    return strip_id(doc)
+
+@api.put("/assigned-tasks/{task_id}")
+async def update_assigned_task(task_id: str, body: GenericDoc, user: dict = Depends(get_current_user)):
+    existing = await db.assigned_tasks.find_one({"id": task_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    if user["role"] == "admin":
+        updates = body.model_dump()
+        updates.pop("id", None)
+        updates.pop("created_at", None)
+        if updates.get("assignee_id"):
+            assignee = await db.users.find_one({"id": updates["assignee_id"]}, {"_id": 0})
+            if not assignee:
+                raise HTTPException(404, "Assignee not found")
+            updates["assignee_name"] = assignee.get("name") or assignee.get("email")
+            if updates["assignee_id"] != existing.get("assignee_id"):
+                updates["assignee_seen_at"] = None
+        updates["updated_at"] = now_utc()
+        await db.assigned_tasks.update_one({"id": task_id}, {"$set": updates})
+    else:
+        if existing.get("assignee_id") != user["id"]:
+            raise HTTPException(403, "Forbidden")
+        status = body.model_dump().get("status")
+        if status not in ASSIGNED_TASK_STATUSES:
+            raise HTTPException(400, "Invalid status")
+        await db.assigned_tasks.update_one(
+            {"id": task_id},
+            {"$set": {"status": status, "updated_at": now_utc()}},
+        )
+    doc = await db.assigned_tasks.find_one({"id": task_id}, {"_id": 0})
+    return doc
+
+@api.delete("/assigned-tasks/{task_id}")
+async def delete_assigned_task(task_id: str, user: dict = Depends(require_roles("admin"))):
+    result = await db.assigned_tasks.delete_one({"id": task_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+@api.post("/assigned-tasks/mark-seen")
+async def mark_assigned_tasks_seen(user: dict = Depends(get_current_user)):
+    await db.assigned_tasks.update_many(
+        {
+            "assignee_id": user["id"],
+            "$or": [{"assignee_seen_at": None}, {"assignee_seen_at": {"$exists": False}}],
+        },
+        {"$set": {"assignee_seen_at": now_utc()}},
+    )
+    return {"ok": True}
+
+# Personal notes (private notepad + sharing between team)
+class NoteInput(BaseModel):
+    title: Optional[str] = ""
+    content: str = ""
+
+class ShareNoteInput(BaseModel):
+    user_ids: List[str] = Field(default_factory=list)
+
+async def _enrich_note(note: dict, viewer: dict) -> dict:
+    note = dict(note)
+    note["is_owner"] = note.get("user_id") == viewer["id"]
+    note["shared_with"] = note.get("shared_with") or []
+    if note["is_owner"]:
+        if note["shared_with"]:
+            shared_users = await db.users.find(
+                {"id": {"$in": note["shared_with"]}},
+                {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1},
+            ).to_list(200)
+            note["shared_with_users"] = [
+                {"id": u["id"], "name": u.get("name") or u.get("email"), "role": u.get("role")}
+                for u in shared_users
+            ]
+        else:
+            note["shared_with_users"] = []
+    else:
+        owner = await db.users.find_one({"id": note.get("user_id")}, {"_id": 0, "name": 1, "email": 1})
+        note["owner_name"] = (owner or {}).get("name") or (owner or {}).get("email") or "Unknown"
+        seen_by = note.get("shared_seen_by") or []
+        note["is_unread"] = viewer["id"] not in seen_by
+    return note
+
+@api.get("/notes/share-targets")
+async def note_share_targets(user: dict = Depends(get_current_user)):
+    users = await db.users.find(
+        {"id": {"$ne": user["id"]}},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1},
+    ).sort("name", 1).to_list(500)
+    return users
+
+@api.get("/notes")
+async def list_notes(user: dict = Depends(get_current_user)):
+    items = await db.notes.find(
+        {"$or": [{"user_id": user["id"]}, {"shared_with": user["id"]}]},
+        {"_id": 0},
+    ).sort("updated_at", -1).to_list(200)
+    return [await _enrich_note(n, user) for n in items]
+
+@api.post("/notes")
+async def create_note(body: NoteInput, user: dict = Depends(get_current_user)):
+    doc = {
+        "id": new_id(),
+        "user_id": user["id"],
+        "title": (body.title or "").strip() or "Untitled",
+        "content": body.content or "",
+        "shared_with": [],
+        "shared_seen_by": [],
+        "created_at": now_utc(),
+        "updated_at": now_utc(),
+    }
+    await db.notes.insert_one(doc.copy())
+    return await _enrich_note(strip_id(doc), user)
+
+@api.put("/notes/{note_id}")
+async def update_note(note_id: str, body: NoteInput, user: dict = Depends(get_current_user)):
+    existing = await db.notes.find_one({"id": note_id, "user_id": user["id"]})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    updates = {
+        "title": (body.title or "").strip() or "Untitled",
+        "content": body.content or "",
+        "updated_at": now_utc(),
+    }
+    await db.notes.update_one({"id": note_id}, {"$set": updates})
+    doc = await db.notes.find_one({"id": note_id}, {"_id": 0})
+    return await _enrich_note(doc, user)
+
+@api.post("/notes/{note_id}/share")
+async def share_note(note_id: str, body: ShareNoteInput, user: dict = Depends(get_current_user)):
+    existing = await db.notes.find_one({"id": note_id, "user_id": user["id"]})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    user_ids = list(dict.fromkeys(body.user_ids))
+    if user_ids:
+        count = await db.users.count_documents({"id": {"$in": user_ids}})
+        if count != len(user_ids):
+            raise HTTPException(400, "One or more users not found")
+    old_shared = set(existing.get("shared_with") or [])
+    new_shared = set(user_ids)
+    newly_added = new_shared - old_shared
+    seen_by = [
+        u for u in (existing.get("shared_seen_by") or [])
+        if u in new_shared and u not in newly_added
+    ]
+    await db.notes.update_one(
+        {"id": note_id},
+        {"$set": {"shared_with": user_ids, "shared_seen_by": seen_by, "updated_at": now_utc()}},
+    )
+    doc = await db.notes.find_one({"id": note_id}, {"_id": 0})
+    return await _enrich_note(doc, user)
+
+@api.post("/notes/{note_id}/mark-seen")
+async def mark_note_seen(note_id: str, user: dict = Depends(get_current_user)):
+    note = await db.notes.find_one({"id": note_id, "shared_with": user["id"]}, {"_id": 0})
+    if not note:
+        raise HTTPException(404, "Not found")
+    await db.notes.update_one({"id": note_id}, {"$addToSet": {"shared_seen_by": user["id"]}})
+    return {"ok": True}
+
+@api.delete("/notes/{note_id}")
+async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
+    result = await db.notes.delete_one({"id": note_id, "user_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
 # Notifications
 @api.get("/notifications")
 async def list_notifications(user: dict = Depends(get_current_user)):
@@ -460,9 +1095,9 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     # Expenses totals
     expense_pipeline = [{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]
     exp = await db.expenses.aggregate(expense_pipeline).to_list(1)
-    inv = await db.invoices.aggregate(expense_pipeline).to_list(1)
+    inv_docs = await db.invoices.find({}, {"_id": 0, "amount": 1, "amount_set": 1}).to_list(5000)
     counts["total_expenses"] = round(exp[0]["total"], 2) if exp else 0
-    counts["total_invoiced"] = round(inv[0]["total"], 2) if inv else 0
+    counts["total_invoiced"] = round(sum(_invoice_amount_value(i) for i in inv_docs), 2)
     counts["pnl"] = counts["total_invoiced"] - counts["total_expenses"]
     return counts
 
@@ -479,7 +1114,7 @@ async def finance_trend(user: dict = Depends(get_current_user)):
     for i in invoices:
         m = (i.get("date") or i.get("created_at", ""))[:7]
         buckets.setdefault(m, {"month": m, "expense": 0, "revenue": 0})
-        buckets[m]["revenue"] += float(i.get("amount", 0) or 0)
+        buckets[m]["revenue"] += _invoice_amount_value(i)
     out = sorted(buckets.values(), key=lambda x: x["month"])
     return out[-6:]
 
@@ -499,6 +1134,20 @@ def _employee_match(user: dict, field_candidates: list[str]):
         keys.append({c: user.get("email")})
     return {"$or": keys}
 
+@api.get("/me/sidebar-alerts")
+async def sidebar_alerts(user: dict = Depends(get_current_user)):
+    uid = user["id"]
+    task_count = await db.assigned_tasks.count_documents({
+        "assignee_id": uid,
+        "$or": [{"assignee_seen_at": None}, {"assignee_seen_at": {"$exists": False}}],
+    })
+    note_count = await db.notes.count_documents({
+        "shared_with": uid,
+        "user_id": {"$ne": uid},
+        "shared_seen_by": {"$nin": [uid]},
+    })
+    return {"assigned_tasks": task_count, "shared_notes": note_count}
+
 @api.get("/me/dashboard")
 async def my_dashboard(user: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -507,14 +1156,27 @@ async def my_dashboard(user: dict = Depends(get_current_user)):
         {"$and": [_employee_match(user, ["assignee"]), {"status": {"$ne": "done"}}]}
     )
     my_tickets = await db.tickets.count_documents(_employee_match(user, ["assigned_to"]))
-    my_meetings = await db.meetings.count_documents({"attendees": {"$regex": user.get("name", "") or "X", "$options": "i"}})
+    my_meeting_items = await db.meetings.find(
+        {"$or": [
+            {"attendees": {"$regex": user.get("name", "") or "X", "$options": "i"}},
+            {"attendees": "All Team"},
+        ]},
+        {"_id": 0, "start_at": 1, "end_at": 1},
+    ).to_list(500)
+    my_meetings = sum(1 for m in my_meeting_items if _meeting_still_upcoming(m))
     my_visits = await db.visits.count_documents(_employee_match(user, ["employee"]))
     my_attendance = await db.attendance.count_documents({"user_id": user["id"]})
     my_leaves_pending = await db.leaves.count_documents({"user_id": user["id"], "status": "pending"})
     today_record = await db.attendance.find_one({"user_id": user["id"], "date": today}, {"_id": 0})
+    my_assigned_tasks = await db.assigned_tasks.count_documents({"assignee_id": user["id"]})
+    my_open_assigned = await db.assigned_tasks.count_documents(
+        {"assignee_id": user["id"], "status": {"$ne": "done"}}
+    )
     return {
         "my_tasks": my_tasks,
         "my_open_tasks": my_open_tasks,
+        "my_assigned_tasks": my_assigned_tasks,
+        "my_open_assigned": my_open_assigned,
         "my_tickets": my_tickets,
         "my_meetings": my_meetings,
         "my_visits": my_visits,
@@ -531,6 +1193,18 @@ async def my_tasks(user: dict = Depends(get_current_user)):
 async def my_tickets(user: dict = Depends(get_current_user)):
     return await db.tickets.find(_employee_match(user, ["assigned_to"]), {"_id": 0}).sort("created_at", -1).to_list(500)
 
+def _meeting_still_upcoming(meeting: dict) -> bool:
+    end_raw = meeting.get("end_at") or meeting.get("start_at")
+    if not end_raw:
+        return False
+    try:
+        end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        return end_dt >= datetime.now(timezone.utc)
+    except Exception:
+        return True
+
 @api.get("/me/meetings")
 async def my_meetings(user: dict = Depends(get_current_user)):
     name = user.get("name") or "X"
@@ -538,7 +1212,7 @@ async def my_meetings(user: dict = Depends(get_current_user)):
         {"$or": [{"attendees": {"$regex": name, "$options": "i"}}, {"attendees": "All Team"}]},
         {"_id": 0},
     ).sort("start_at", 1).to_list(500)
-    return items
+    return [m for m in items if _meeting_still_upcoming(m)]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Global Search
@@ -565,7 +1239,10 @@ async def global_search(q: str, user: dict = Depends(get_current_user)):
     q = q.strip()
     pattern = {"$regex": q, "$options": "i"}
     results = []
-    for col, (title_field, fields, route) in SEARCH_COLLECTIONS.items():
+    searchable = SEARCH_COLLECTIONS
+    if user.get("role") != "admin":
+        searchable = {k: v for k, v in SEARCH_COLLECTIONS.items() if k != "clients"}
+    for col, (title_field, fields, route) in searchable.items():
         or_filter = [{f: pattern} for f in fields]
         docs = await db[col].find({"$or": or_filter}, {"_id": 0}).limit(5).to_list(5)
         for d in docs:
@@ -593,9 +1270,9 @@ async def _build_context(user: dict) -> str:
         "pending_leaves": await db.leaves.count_documents({"status": "pending"}),
     }
     pnl_exp = await db.expenses.aggregate([{"$group": {"_id": None, "t": {"$sum": "$amount"}}}]).to_list(1)
-    pnl_inv = await db.invoices.aggregate([{"$group": {"_id": None, "t": {"$sum": "$amount"}}}]).to_list(1)
+    inv_docs = await db.invoices.find({}, {"_id": 0, "amount": 1, "amount_set": 1}).to_list(5000)
     expenses = pnl_exp[0]["t"] if pnl_exp else 0
-    revenue = pnl_inv[0]["t"] if pnl_inv else 0
+    revenue = sum(_invoice_amount_value(i) for i in inv_docs)
     counts["revenue"] = revenue
     counts["expenses"] = expenses
     counts["pnl"] = revenue - expenses
@@ -736,10 +1413,10 @@ async def seed():
 
     if await db.projects.count_documents({}) == 0:
         await db.projects.insert_many([
-            {"id": new_id(), "name": "Aurora POS Rollout", "client": "Aurora Retail Pvt Ltd", "manager": "Karan Mehta", "status": "in_progress", "progress": 62, "budget": 480000, "deadline": "2026-04-30", "start_date": "2026-01-10", "created_at": now_utc()},
-            {"id": new_id(), "name": "Helix Patient Portal", "client": "Helix Health Systems", "manager": "Vikram Iyer", "status": "in_progress", "progress": 38, "budget": 220000, "deadline": "2026-06-15", "start_date": "2026-02-01", "created_at": now_utc()},
-            {"id": new_id(), "name": "Vertex Fleet Tracker", "client": "Vertex Logistics", "manager": "Riya Sharma", "status": "planning", "progress": 10, "budget": 660000, "deadline": "2026-08-30", "start_date": "2026-03-01", "created_at": now_utc()},
-            {"id": new_id(), "name": "Pixelnova Brand Site", "client": "Pixelnova Studio", "manager": "Sneha Patel", "status": "completed", "progress": 100, "budget": 95000, "deadline": "2026-01-28", "start_date": "2025-12-01", "created_at": now_utc()},
+            {"id": new_id(), "name": "Aurora POS Rollout", "client": "Aurora Retail Pvt Ltd", "manager": "Karan Mehta", "status": "in_progress", "progress": 62, "budget": 480000, "budget_set": True, "created_by_role": "admin", "deadline": "2026-04-30", "start_date": "2026-01-10", "created_at": now_utc()},
+            {"id": new_id(), "name": "Helix Patient Portal", "client": "Helix Health Systems", "manager": "Vikram Iyer", "status": "in_progress", "progress": 38, "budget": 220000, "budget_set": True, "created_by_role": "admin", "deadline": "2026-06-15", "start_date": "2026-02-01", "created_at": now_utc()},
+            {"id": new_id(), "name": "Vertex Fleet Tracker", "client": "Vertex Logistics", "manager": "Riya Sharma", "status": "planning", "progress": 10, "budget": 660000, "budget_set": True, "created_by_role": "admin", "deadline": "2026-08-30", "start_date": "2026-03-01", "created_at": now_utc()},
+            {"id": new_id(), "name": "Pixelnova Brand Site", "client": "Pixelnova Studio", "manager": "Sneha Patel", "status": "completed", "progress": 100, "budget": 95000, "budget_set": True, "created_by_role": "admin", "deadline": "2026-01-28", "start_date": "2025-12-01", "created_at": now_utc()},
         ])
 
     if await db.tasks.count_documents({}) == 0:
@@ -761,10 +1438,10 @@ async def seed():
 
     if await db.invoices.count_documents({}) == 0:
         await db.invoices.insert_many([
-            {"id": new_id(), "invoice_no": "INV-2026-001", "client": "Aurora Retail Pvt Ltd", "amount": 250000, "status": "paid", "date": "2026-01-15", "due_date": "2026-02-15", "created_at": now_utc()},
-            {"id": new_id(), "invoice_no": "INV-2026-002", "client": "Helix Health Systems", "amount": 110000, "status": "sent", "date": "2026-02-01", "due_date": "2026-03-01", "created_at": now_utc()},
-            {"id": new_id(), "invoice_no": "INV-2025-099", "client": "Pixelnova Studio", "amount": 95000, "status": "paid", "date": "2025-12-28", "due_date": "2026-01-28", "created_at": now_utc()},
-            {"id": new_id(), "invoice_no": "INV-2026-003", "client": "Vertex Logistics", "amount": 220000, "status": "draft", "date": "2026-02-10", "due_date": "2026-03-10", "created_at": now_utc()},
+            {"id": new_id(), "invoice_no": "INV-2026-001", "client": "Aurora Retail Pvt Ltd", "amount": 250000, "amount_set": True, "created_by_role": "admin", "status": "paid", "date": "2026-01-15", "due_date": "2026-02-15", "created_at": now_utc()},
+            {"id": new_id(), "invoice_no": "INV-2026-002", "client": "Helix Health Systems", "amount": 110000, "amount_set": True, "created_by_role": "admin", "status": "sent", "date": "2026-02-01", "due_date": "2026-03-01", "created_at": now_utc()},
+            {"id": new_id(), "invoice_no": "INV-2025-099", "client": "Pixelnova Studio", "amount": 95000, "amount_set": True, "created_by_role": "admin", "status": "paid", "date": "2025-12-28", "due_date": "2026-01-28", "created_at": now_utc()},
+            {"id": new_id(), "invoice_no": "INV-2026-003", "client": "Vertex Logistics", "amount": 220000, "amount_set": True, "created_by_role": "admin", "status": "draft", "date": "2026-02-10", "due_date": "2026-03-10", "created_at": now_utc()},
         ])
 
     if await db.meetings.count_documents({}) == 0:
@@ -783,11 +1460,11 @@ async def seed():
 
     if await db.assets.count_documents({}) == 0:
         await db.assets.insert_many([
-            {"id": new_id(), "name": "MacBook Pro 16\" M3", "category": "Laptop", "serial": "MBP-2024-A12", "assigned_to": "Riya Sharma", "purchase_date": "2024-08-01", "value": 285000, "depreciation": 15, "status": "assigned", "created_at": now_utc()},
-            {"id": new_id(), "name": "Dell XPS 15", "category": "Laptop", "serial": "DXPS-2023-B07", "assigned_to": "Vikram Iyer", "purchase_date": "2023-11-15", "value": 165000, "depreciation": 25, "status": "assigned", "created_at": now_utc()},
-            {"id": new_id(), "name": "iPhone 15 Pro", "category": "Mobile", "serial": "IP15P-098", "assigned_to": "Karan Mehta", "purchase_date": "2024-01-20", "value": 135000, "depreciation": 20, "status": "assigned", "created_at": now_utc()},
-            {"id": new_id(), "name": "LG UltraWide Monitor", "category": "Peripheral", "serial": "LGU-2024-301", "assigned_to": "Sneha Patel", "purchase_date": "2024-03-10", "value": 42000, "depreciation": 10, "status": "assigned", "created_at": now_utc()},
-            {"id": new_id(), "name": "HP LaserJet Pro", "category": "Printer", "serial": "HPLJ-002", "assigned_to": None, "purchase_date": "2022-06-15", "value": 28000, "depreciation": 40, "status": "in_storage", "created_at": now_utc()},
+            {"id": new_id(), "name": "MacBook Pro 16\" M3", "category": "Laptop", "serial": "MBP-2024-A12", "assigned_to": "Riya Sharma", "purchase_date": "2024-08-01", "qty": 1, "unit_cost": 285000, "value": 285000, "status": "assigned", "created_at": now_utc()},
+            {"id": new_id(), "name": "Dell XPS 15", "category": "Laptop", "serial": "DXPS-2023-B07", "assigned_to": "Vikram Iyer", "purchase_date": "2023-11-15", "qty": 1, "unit_cost": 165000, "value": 165000, "status": "assigned", "created_at": now_utc()},
+            {"id": new_id(), "name": "iPhone 15 Pro", "category": "Mobile", "serial": "IP15P-098", "assigned_to": "Karan Mehta", "purchase_date": "2024-01-20", "qty": 1, "unit_cost": 135000, "value": 135000, "status": "assigned", "created_at": now_utc()},
+            {"id": new_id(), "name": "LG UltraWide Monitor", "category": "Peripheral", "serial": "LGU-2024-301", "assigned_to": "Sneha Patel", "purchase_date": "2024-03-10", "qty": 1, "unit_cost": 42000, "value": 42000, "status": "assigned", "created_at": now_utc()},
+            {"id": new_id(), "name": "HP LaserJet Pro", "category": "Printer", "serial": "HPLJ-002", "assigned_to": None, "purchase_date": "2022-06-15", "qty": 1, "unit_cost": 28000, "value": 28000, "status": "in_storage", "created_at": now_utc()},
         ])
 
     if await db.amc.count_documents({}) == 0:
@@ -820,11 +1497,23 @@ async def on_start():
     # indexes
     await db.users.create_index("email", unique=True)
     await db.attendance.create_index([("user_id", 1), ("date", 1)])
+    await db.assigned_tasks.create_index([("assignee_id", 1), ("task_date", 1)])
+    await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
+    await db.notes.create_index("shared_with")
     await seed()
 
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    if not raw or raw == "*":
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 # Mount routers + CORS
 app.include_router(api)
@@ -832,7 +1521,7 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

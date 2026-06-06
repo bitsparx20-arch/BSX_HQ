@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAttendance } from "@/contexts/AttendanceContext";
 import { PageHeader, KpiCard, Section, StatusBadge, formatDate } from "@/components/Shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,7 @@ import { toast } from "sonner";
 
 export default function Attendance() {
   const { user } = useAuth();
+  const { refresh: refreshAttendanceGate } = useAttendance();
   const [today, setToday] = useState({});
   const [records, setRecords] = useState([]);
   const [leaves, setLeaves] = useState([]);
@@ -34,6 +36,7 @@ export default function Attendance() {
     try {
       await api.post("/attendance/check-in", { note: "Web check-in", location: "Office" });
       toast.success("Checked in");
+      await refreshAttendanceGate();
       load();
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };

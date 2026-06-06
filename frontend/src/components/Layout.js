@@ -1,13 +1,15 @@
 import React, { useEffect, useState, useRef } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAttendance, ATTENDANCE_PATH } from "@/contexts/AttendanceContext";
+import { useSidebarAlerts } from "@/contexts/SidebarAlertsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { api } from "@/lib/api";
 import {
   House, Clock, Briefcase, Receipt, UsersThree,
   CalendarBlank, MapPin, HardDrives, BellRinging, Headset,
   FileText, ChartBar, Building, WhatsappLogo, SignOut, MagnifyingGlass,
-  Sun, Moon, List, X,
+  Sun, Moon, List, X, ListChecks, NotePencil,
 } from "@phosphor-icons/react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -15,17 +17,29 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import ChatWidget from "@/components/ChatWidget";
+import { getHeaderGreeting } from "@/lib/greetings";
+
+const NAV_ALERT_KEYS = {
+  "/assigned-tasks": "assigned_tasks",
+  "/notes": "shared_notes",
+};
+
+const NavAlertDot = () => (
+  <span className="bx-nav-alert-dot" aria-label="New items" title="New — not viewed yet" />
+);
 
 const ALL_NAV = [
   { to: "/", label: "Dashboard", icon: House, exact: true, group: "Overview", roles: ["admin", "manager", "employee"] },
   { to: "/attendance", label: "Attendance", icon: Clock, group: "Workspace", roles: ["admin", "manager", "employee"] },
+  { to: "/assigned-tasks", label: "Assigned Tasks", icon: ListChecks, group: "Workspace", roles: ["admin", "manager", "employee"] },
+  { to: "/notes", label: "Notes", icon: NotePencil, group: "Workspace", roles: ["admin", "manager", "employee"] },
   { to: "/meetings", label: "Meetings & Calendar", icon: CalendarBlank, group: "Workspace", roles: ["admin", "manager", "employee"] },
   { to: "/projects", label: "Projects", icon: Briefcase, group: "Operations", roles: ["admin", "manager", "employee"] },
   { to: "/employees", label: "Employees", icon: UsersThree, group: "Operations", roles: ["admin", "manager"] },
   { to: "/visits", label: "Client Visits", icon: MapPin, group: "Operations", roles: ["admin", "manager"] },
   { to: "/finance", label: "Finance & Expenses", icon: Receipt, group: "Business", roles: ["admin", "manager"] },
-  { to: "/crm", label: "Client CRM", icon: Building, group: "Business", roles: ["admin", "manager"] },
-  { to: "/assets", label: "Asset Master", icon: HardDrives, group: "Resources", roles: ["admin", "manager", "employee"] },
+  { to: "/crm", label: "Client CRM", icon: Building, group: "Business", roles: ["admin"] },
+  { to: "/assets", label: "Asset Master", icon: HardDrives, group: "Resources", roles: ["admin", "manager"] },
   { to: "/amc", label: "AMC & Maintenance", icon: BellRinging, group: "Resources", roles: ["admin", "manager"] },
   { to: "/documents", label: "Document Manager", icon: FileText, group: "Resources", roles: ["admin", "manager", "employee"] },
   { to: "/helpdesk", label: "Helpdesk / Tickets", icon: Headset, group: "Support", roles: ["admin", "manager", "employee"] },
@@ -39,15 +53,16 @@ const ICON_BY_TYPE = {
   visits: MapPin, tasks: Briefcase, invoices: Receipt, expenses: Receipt,
 };
 
-function SidebarBody({ NAV, onNavigate }) {
+function SidebarBody({ NAV, onNavigate, navLocked, alerts = {} }) {
   const groups = NAV.reduce((acc, n) => {
     (acc[n.group] = acc[n.group] || []).push(n);
     return acc;
   }, {});
+  const homePath = navLocked ? ATTENDANCE_PATH : "/";
   return (
     <>
       <div className="px-5 py-5 border-b border-[var(--bx-border)]">
-        <Link to="/" onClick={onNavigate} className="flex items-center gap-2.5">
+        <Link to={homePath} onClick={onNavigate} className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#2453E5] to-[#1A45CC] grid place-items-center text-white font-bold text-base shadow-sm">B</div>
           <div>
             <div className="font-bold text-[15px] tracking-tight text-[var(--bx-text)]">Bitsparx HQ</div>
@@ -62,6 +77,23 @@ function SidebarBody({ NAV, onNavigate }) {
             <div className="space-y-0.5">
               {items.map((n) => {
                 const Icon = n.icon;
+                const locked = navLocked && n.to !== ATTENDANCE_PATH;
+                if (locked) {
+                  return (
+                    <span
+                      key={n.to}
+                      className="bx-nav-item opacity-40 cursor-not-allowed select-none"
+                      aria-disabled="true"
+                      title="Check in first to unlock"
+                      data-testid={`nav-${n.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+                    >
+                      <Icon size={17} weight="regular" />
+                      <span>{n.label}</span>
+                    </span>
+                  );
+                }
+                const alertKey = NAV_ALERT_KEYS[n.to];
+                const hasAlert = alertKey && (alerts[alertKey] || 0) > 0;
                 return (
                   <NavLink
                     key={n.to}
@@ -72,7 +104,8 @@ function SidebarBody({ NAV, onNavigate }) {
                     data-testid={`nav-${n.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
                   >
                     <Icon size={17} weight="regular" />
-                    <span>{n.label}</span>
+                    <span className="flex-1 min-w-0 truncate">{n.label}</span>
+                    {hasAlert && <NavAlertDot />}
                   </NavLink>
                 );
               })}
@@ -80,8 +113,11 @@ function SidebarBody({ NAV, onNavigate }) {
           </div>
         ))}
       </nav>
-      <div className="border-t border-[var(--bx-border)] p-3 text-[11px] text-[var(--bx-text-3)] flex items-center gap-2">
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+      <div className="border-t border-[var(--bx-border)] p-3 text-[11px] text-[var(--bx-text-2)] flex items-center gap-2.5 font-medium">
+        <span className="relative flex h-3 w-3 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+          <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500 ring-4 ring-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.85)]" />
+        </span>
         System online · v1.2
       </div>
     </>
@@ -90,9 +126,12 @@ function SidebarBody({ NAV, onNavigate }) {
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const { checkedInToday, loading: attendanceLoading } = useAttendance();
+  const { alerts, refresh: refreshAlerts } = useSidebarAlerts();
   const { theme, toggle: toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const navLocked = !attendanceLoading && !checkedInToday;
   const [notifCount, setNotifCount] = useState(0);
   const [notifs, setNotifs] = useState([]);
   const [q, setQ] = useState("");
@@ -106,9 +145,17 @@ export default function Layout() {
       setNotifs(data.slice(0, 6));
       setNotifCount(data.length);
     }).catch(() => {});
-  }, [location.pathname]);
+    refreshAlerts();
+  }, [location.pathname, refreshAlerts]);
 
   useEffect(() => { setDrawerOpen(false); }, [location.pathname]);
+
+  useEffect(() => {
+    if (attendanceLoading || checkedInToday) return;
+    if (location.pathname !== ATTENDANCE_PATH) {
+      navigate(ATTENDANCE_PATH, { replace: true });
+    }
+  }, [attendanceLoading, checkedInToday, location.pathname, navigate]);
 
   useEffect(() => {
     if (!q || q.length < 2) { setResults([]); return; }
@@ -134,9 +181,12 @@ export default function Layout() {
     .map((s) => s[0].toUpperCase()).join("");
 
   const role = user?.role || "employee";
+  const roleLabel = role === "admin" ? "CEO" : role.charAt(0).toUpperCase() + role.slice(1);
   const NAV = ALL_NAV.filter((n) => n.roles.includes(role));
+  const greeting = getHeaderGreeting(user);
 
   const goToResult = (r) => {
+    if (navLocked) return;
     setShowResults(false);
     setQ("");
     navigate(r.route);
@@ -146,7 +196,7 @@ export default function Layout() {
     <div className="flex min-h-screen bg-[var(--bx-bg-2)]" data-testid="app-layout">
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-64 bg-[var(--bx-card)] border-r border-[var(--bx-border)] flex-col sticky top-0 h-screen" data-testid="sidebar">
-        <SidebarBody NAV={NAV} />
+        <SidebarBody NAV={NAV} navLocked={navLocked} alerts={alerts} />
       </aside>
 
       {/* Mobile drawer */}
@@ -154,7 +204,7 @@ export default function Layout() {
         <>
           <div className="lg:hidden fixed inset-0 bg-black/60 z-40 bx-sidebar-overlay" onClick={() => setDrawerOpen(false)} />
           <aside className="lg:hidden fixed inset-y-0 left-0 w-72 max-w-[80vw] bg-[var(--bx-card)] border-r border-[var(--bx-border)] flex flex-col z-50 bx-sidebar-drawer" data-testid="mobile-drawer">
-            <SidebarBody NAV={NAV} onNavigate={() => setDrawerOpen(false)} />
+            <SidebarBody NAV={NAV} navLocked={navLocked} alerts={alerts} onNavigate={() => setDrawerOpen(false)} />
           </aside>
         </>
       )}
@@ -177,8 +227,9 @@ export default function Layout() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onFocus={() => results.length > 0 && setShowResults(true)}
-              placeholder="Search projects, clients, employees…"
-              className="w-full bg-[var(--bx-bg-3)] hover:bg-[var(--bx-bg-2)] focus:bg-[var(--bx-card)] focus:ring-2 focus:ring-[var(--bx-brand)]/30 focus:border-[var(--bx-brand)] border border-[var(--bx-border)] rounded-lg pl-9 pr-3 h-9 text-sm placeholder:text-[var(--bx-text-3)] text-[var(--bx-text)] outline-none transition"
+              placeholder={navLocked ? "Check in to search…" : "Search projects, clients, employees…"}
+              disabled={navLocked}
+              className="w-full bg-[var(--bx-bg-3)] hover:bg-[var(--bx-bg-2)] focus:bg-[var(--bx-card)] focus:ring-2 focus:ring-[var(--bx-brand)]/30 focus:border-[var(--bx-brand)] border border-[var(--bx-border)] rounded-lg pl-9 pr-3 h-9 text-sm placeholder:text-[var(--bx-text-3)] text-[var(--bx-text)] outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="global-search"
             />
             {showResults && results.length > 0 && (
@@ -211,7 +262,22 @@ export default function Layout() {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div
+            className="hidden md:flex flex-1 min-w-0 items-center justify-center px-4"
+            data-testid="header-greeting"
+          >
+            <p className="inline-flex items-center gap-3 min-w-0 max-w-2xl">
+              <span className="text-sm font-semibold text-[var(--bx-text)] whitespace-nowrap shrink-0">
+                {greeting.label} 🚀, {greeting.firstName}
+              </span>
+              <span className="w-px h-4 bg-[var(--bx-border)] shrink-0" aria-hidden />
+              <span className="text-base lg:text-lg italic text-[var(--bx-text-2)] truncate min-w-0">
+                {greeting.quote}
+              </span>
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={toggleTheme}
               className="h-9 w-9 grid place-items-center rounded-lg hover:bg-[var(--bx-bg-3)] transition"
@@ -252,28 +318,46 @@ export default function Layout() {
                   </div>
                 ))}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link to="/notifications" className="w-full text-center justify-center text-sm text-[var(--bx-brand)] font-medium">View all</Link>
+                <DropdownMenuItem asChild disabled={navLocked}>
+                  <Link
+                    to={navLocked ? ATTENDANCE_PATH : "/notifications"}
+                    className={`w-full text-center justify-center text-sm font-medium ${navLocked ? "text-[var(--bx-text-3)] pointer-events-none" : "text-[var(--bx-brand)]"}`}
+                  >
+                    View all
+                  </Link>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2.5 pl-1.5 pr-1.5 sm:pr-3 py-1.5 rounded-lg hover:bg-[var(--bx-bg-3)] transition" data-testid="user-menu">
-                  <Avatar className="h-7 w-7">
+                <button
+                  className="flex items-center gap-2.5 pl-1 pr-2 sm:pr-2.5 h-10 rounded-lg hover:bg-[var(--bx-bg-3)] transition"
+                  data-testid="user-menu"
+                >
+                  <Avatar className="h-8 w-8 shrink-0">
                     <AvatarFallback className="bg-gradient-to-br from-[#2453E5] to-[#1A45CC] text-white text-xs font-bold">{initials}</AvatarFallback>
                   </Avatar>
-                  <div className="text-left hidden sm:block">
-                    <div className="text-xs font-semibold text-[var(--bx-text)] leading-none">{user?.name}</div>
-                    <div className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] mt-0.5 font-medium">{user?.role}</div>
+                  <div className="hidden sm:flex flex-col justify-center items-start min-w-0 gap-0.5 leading-none">
+                    <span className="text-xs font-semibold text-[var(--bx-text)] truncate max-w-[130px]">{user?.name}</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--bx-brand)]">{roleLabel}</span>
                   </div>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>
-                  <div className="text-sm font-medium">{user?.name}</div>
-                  <div className="text-xs text-[var(--bx-text-3)]">{user?.email}</div>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuLabel className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-11 w-11 ring-2 ring-[var(--bx-brand)]/25">
+                      <AvatarFallback className="bg-gradient-to-br from-[#2453E5] to-[#1A45CC] text-white text-sm font-bold">{initials}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <div className="text-base font-bold text-[var(--bx-text)] truncate">{user?.name}</div>
+                      <span className="mt-1 inline-flex items-center rounded-md bg-[var(--bx-brand)]/12 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-[var(--bx-brand)]">
+                        {roleLabel}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-[var(--bx-text-3)] truncate">{user?.email}</div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={logout} data-testid="logout-btn">
@@ -284,11 +368,35 @@ export default function Layout() {
           </div>
         </header>
 
+        <div
+          className="sm:hidden px-4 py-1.5 border-b border-[var(--bx-border)] bg-[var(--bx-bg-3)]/40"
+          data-testid="header-greeting-mobile"
+        >
+          <p className="flex items-center gap-2 min-w-0 text-[11px]">
+            <span className="font-semibold text-[var(--bx-text)] whitespace-nowrap shrink-0">
+              {greeting.label} 🚀, {greeting.firstName}
+            </span>
+            <span className="w-px h-3 bg-[var(--bx-border)] shrink-0" aria-hidden />
+            <span className="text-sm italic text-[var(--bx-text-2)] truncate min-w-0">
+              {greeting.quote}
+            </span>
+          </p>
+        </div>
+
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
+          {navLocked && location.pathname === ATTENDANCE_PATH && (
+            <div
+              className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-[var(--bx-text)]"
+              data-testid="check-in-required-banner"
+            >
+              <span className="font-semibold">Check in required.</span>{" "}
+              Use the button below to check in for today. Other modules unlock after check-in.
+            </div>
+          )}
           <Outlet />
         </main>
 
-        <ChatWidget />
+        {!navLocked && <ChatWidget />}
       </div>
     </div>
   );

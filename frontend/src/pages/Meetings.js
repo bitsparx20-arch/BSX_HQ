@@ -3,37 +3,42 @@ import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enUS from "date-fns/locale/en-US";
 import { api } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader, Section } from "@/components/Shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Plus, VideoCamera, MapPin, Clock } from "@phosphor-icons/react";
 import { toast } from "sonner";
+import { getMeetingLink, upcomingMeetings } from "@/lib/meetings";
 
 const locales = { "en-US": enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
 
-const blank = { title: "", start_at: "", end_at: "", location: "", attendees: "", recurring: "none", description: "" };
+const blank = { title: "", start_at: "", end_at: "", location: "", meeting_link: "", attendees: "", recurring: "none", description: "" };
 
 export default function Meetings() {
+  const { user } = useAuth();
+  const canWrite = user?.role === "admin" || user?.role === "manager";
   const [meetings, setMeetings] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(blank);
   const [selected, setSelected] = useState(null);
-  const [date, setDate] = useState(new Date());
-  const [view, setView] = useState("month");
+  const [date, setDate] = useState(() => new Date());
+  const [view, setView] = useState("week");
+
+  const scrollToTime = useMemo(() => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - 30, 0, 0);
+    return now;
+  }, []);
 
   const load = async () => {
     const { data } = await api.get("/meetings");
     setMeetings(data);
-    // Jump to the month of the first meeting if not in current view
-    if (data.length > 0 && data[0].start_at) {
-      const firstDate = new Date(data[0].start_at);
-      if (!isNaN(firstDate.getTime())) setDate(firstDate);
-    }
   };
   useEffect(() => { load(); }, []);
 
@@ -93,21 +98,20 @@ export default function Meetings() {
     } catch (e) { toast.error("Failed"); }
   };
 
-  const upcoming = meetings
-    .filter((m) => m.start_at && new Date(m.start_at) > new Date())
-    .sort((a, b) => new Date(a.start_at) - new Date(b.start_at))
-    .slice(0, 5);
+  const upcoming = upcomingMeetings(meetings, 5);
 
   return (
     <div>
       <PageHeader
         eyebrow="Module · 05"
         title="Meetings & Calendar"
-        description="Schedule meetings, set recurrences, manage attendees — WhatsApp reminders fire automatically."
+        
         actions={
-          <Button onClick={() => openCreate()} className="bg-[var(--bx-brand)] hover:opacity-90 text-white" data-testid="new-meeting-btn">
-            <Plus size={14} weight="bold" className="mr-1.5" /> New meeting
-          </Button>
+          canWrite ? (
+            <Button onClick={() => openCreate()} className="bg-[var(--bx-brand)] hover:opacity-90 text-white" data-testid="new-meeting-btn">
+              <Plus size={14} weight="bold" className="mr-1.5" /> New meeting
+            </Button>
+          ) : null
         }
       />
 
@@ -119,14 +123,17 @@ export default function Meetings() {
             startAccessor="start"
             endAccessor="end"
             style={{ height: 640 }}
-            selectable
-            onSelectSlot={openCreate}
+            selectable={canWrite}
+            onSelectSlot={canWrite ? openCreate : undefined}
             onSelectEvent={openEvent}
             views={["month", "week", "day", "agenda"]}
+            defaultView="week"
             view={view}
             onView={setView}
             date={date}
             onNavigate={setDate}
+            scrollToTime={scrollToTime}
+            getNow={() => new Date()}
             popup
           />
         </div>
@@ -141,12 +148,23 @@ export default function Meetings() {
                   <Clock size={11} />
                   <span className="bx-mono">{new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
                 </div>
-                {m.location && (
+                {getMeetingLink(m) ? (
+                  <a
+                    href={getMeetingLink(m)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 text-xs text-[var(--bx-brand)] mt-0.5 hover:underline"
+                  >
+                    <VideoCamera size={11} />
+                    <span className="truncate">Join meeting</span>
+                  </a>
+                ) : m.location ? (
                   <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
-                    {m.location?.includes("oom") || m.location?.includes("ttp") ? <VideoCamera size={11} /> : <MapPin size={11} />}
+                    <MapPin size={11} />
                     <span className="truncate">{m.location}</span>
                   </div>
-                )}
+                ) : null}
               </button>
             ))}
           </div>
@@ -173,8 +191,12 @@ export default function Meetings() {
               <Input type="datetime-local" value={form.end_at} onChange={(e) => setForm({ ...form, end_at: e.target.value })} />
             </div>
             <div className="col-span-2">
-              <Label className="text-xs">Location or link</Label>
-              <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Zoom link or room name" />
+              <Label className="text-xs">Location</Label>
+              <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Main Auditorium, Meet Room A…" />
+            </div>
+            <div className="col-span-2">
+              <Label className="text-xs">Meeting link</Label>
+              <Input value={form.meeting_link} onChange={(e) => setForm({ ...form, meeting_link: e.target.value })} placeholder="https://zoom.us/j/… or Google Meet link" />
             </div>
             <div className="col-span-2">
               <Label className="text-xs">Attendees (comma separated)</Label>

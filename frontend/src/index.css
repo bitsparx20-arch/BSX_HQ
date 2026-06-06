@@ -12,8 +12,8 @@
   --bx-bg-3: #F1F5F9;
   --bx-card: #FFFFFF;
   --bx-text: #0F172A;
-  --bx-text-2: #475569;
-  --bx-text-3: #94A3B8;
+  --bx-text-2: #334155;
+  --bx-text-3: #64748B;
   --bx-brand: #2453E5;
   --bx-brand-hover: #1A45CC;
   --bx-brand-soft: #EEF2FF;
@@ -52,11 +52,21 @@ body {
   font-feature-settings: "ss01" on, "cv11" on;
 }
 
-.bx-heading {
-  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
-  letter-spacing: -0.022em;
-  line-height: 1.1;
-  font-weight: 700;
+@layer components {
+  .bx-heading {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    letter-spacing: -0.022em;
+    line-height: 1.1;
+    font-weight: 700;
+    color: var(--bx-text);
+  }
+}
+
+/* Force readable dark text on always-light surfaces (e.g. login form panel). */
+.bx-light-surface {
+  --bx-text: #0F172A;
+  --bx-text-2: #334155;
+  --bx-text-3: #64748B;
   color: var(--bx-text);
 }
 
@@ -83,7 +93,7 @@ body {
     --secondary: 220 14% 96%;
     --secondary-foreground: 222 47% 11%;
     --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted-foreground: 215 16% 35%;
     --accent: 220 14% 96%;
     --accent-foreground: 222 47% 11%;
     --destructive: 0 84% 60%;
@@ -150,6 +160,25 @@ body {
 }
 .bx-nav-item.active svg { color: var(--bx-brand); }
 
+.bx-nav-alert-dot {
+  position: relative;
+  display: inline-flex;
+  height: 8px;
+  width: 8px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: #10b981;
+  box-shadow: 0 0 0 2px var(--bx-card), 0 0 8px rgba(16, 185, 129, 0.85);
+  animation: bx-nav-alert-pulse 2s ease-in-out infinite;
+}
+.bx-nav-item.active .bx-nav-alert-dot {
+  box-shadow: 0 0 0 2px var(--bx-brand-soft), 0 0 8px rgba(16, 185, 129, 0.85);
+}
+@keyframes bx-nav-alert-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.75; transform: scale(1.15); }
+}
+
 .bx-kpi {
   background: var(--bx-card);
   border: 1px solid var(--bx-border);
@@ -165,20 +194,37 @@ body {
 .dark .bx-kpi:hover { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3); }
 
 /* Kanban */
+.kanban-board-shell {
+  min-height: calc(100dvh - 340px);
+}
+
+.kanban-board {
+  min-height: inherit;
+  height: 100%;
+}
+
 .kanban-col {
   background: var(--bx-bg-3);
   border: 1px solid var(--bx-border);
   border-radius: 12px;
-  min-height: 480px;
+  min-height: 280px;
   display: flex;
   flex-direction: column;
 }
+
+@media (min-width: 1024px) {
+  .kanban-col {
+    min-height: calc(100dvh - 340px);
+    max-height: calc(100dvh - 340px);
+  }
+}
+
 .kanban-col.drop-over { border-color: var(--bx-brand); background: var(--bx-brand-soft); }
 .kanban-card {
   background: var(--bx-card);
   border: 1px solid var(--bx-border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 14px;
   cursor: grab;
   transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
@@ -202,6 +248,53 @@ body {
 .dark .rbc-agenda-table, .dark .rbc-agenda-view table.rbc-agenda-table tbody > tr > td { color: var(--bx-text) !important; border-color: var(--bx-border) !important; }
 .rbc-button-link { color: var(--bx-text); }
 
+/* Current time — prominent green "now" line in week/day views */
+.rbc-current-time-indicator {
+  background: #10B981 !important;
+  height: 3px !important;
+  z-index: 12 !important;
+  box-shadow:
+    0 0 6px rgba(16, 185, 129, 0.9),
+    0 0 14px rgba(16, 185, 129, 0.55);
+  pointer-events: none;
+}
+
+.rbc-current-time-indicator::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #10B981;
+  border: 2px solid #fff;
+  box-shadow:
+    0 0 0 4px rgba(16, 185, 129, 0.45),
+    0 0 14px rgba(16, 185, 129, 1);
+  animation: bx-now-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes bx-now-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px rgba(16, 185, 129, 0.45),
+      0 0 14px rgba(16, 185, 129, 1);
+    transform: translateY(-50%) scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 9px rgba(16, 185, 129, 0.22),
+      0 0 22px rgba(16, 185, 129, 1);
+    transform: translateY(-50%) scale(1.12);
+  }
+}
+
+.dark .rbc-current-time-indicator::before {
+  border-color: var(--bx-card);
+}
+
 /* Leaflet popup */
 .leaflet-container { font-family: 'Plus Jakarta Sans', sans-serif !important; background: var(--bx-bg-3); }
 .leaflet-popup-content-wrapper { border-radius: 8px !important; background: var(--bx-card) !important; color: var(--bx-text) !important; }
@@ -217,3 +310,99 @@ body {
 @keyframes bx-slide-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 
 [data-debug-wrapper="true"] { display: contents !important; }
+
+/* Rich text note editor (TipTap) */
+.bx-rich-editor-shell .ProseMirror {
+  min-height: 20rem;
+  color: var(--bx-text);
+  line-height: 1.65;
+  outline: none;
+}
+.bx-rich-editor-shell .ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--bx-text-3);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.bx-rich-editor-shell .ProseMirror h1 { font-size: 1.75rem; font-weight: 800; margin: 1rem 0 0.5rem; letter-spacing: -0.02em; }
+.bx-rich-editor-shell .ProseMirror h2 { font-size: 1.35rem; font-weight: 700; margin: 0.85rem 0 0.4rem; }
+.bx-rich-editor-shell .ProseMirror h3 { font-size: 1.1rem; font-weight: 700; margin: 0.75rem 0 0.35rem; }
+.bx-rich-editor-shell .ProseMirror p { margin: 0.4rem 0; }
+.bx-rich-editor-shell .ProseMirror ul,
+.bx-rich-editor-shell .ProseMirror ol { padding-left: 1.4rem; margin: 0.5rem 0; }
+.bx-rich-editor-shell .ProseMirror li { margin: 0.2rem 0; }
+.bx-rich-editor-shell .ProseMirror blockquote {
+  border-left: 3px solid var(--bx-brand);
+  margin: 0.75rem 0;
+  padding: 0.25rem 0 0.25rem 1rem;
+  color: var(--bx-text-2);
+  font-style: italic;
+}
+.bx-rich-editor-shell .ProseMirror pre {
+  background: var(--bx-bg-3);
+  border: 1px solid var(--bx-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.bx-rich-editor-shell .ProseMirror code {
+  background: var(--bx-bg-3);
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.35rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+}
+.bx-rich-editor-shell .ProseMirror pre code { background: none; padding: 0; }
+.bx-rich-editor-shell .ProseMirror mark {
+  background: #fef08a;
+  color: inherit;
+  border-radius: 0.15rem;
+  padding: 0 0.15rem;
+}
+.dark .bx-rich-editor-shell .ProseMirror mark { background: rgba(250, 204, 21, 0.35); }
+.bx-rich-editor-shell .ProseMirror img.bx-editor-image,
+.bx-rich-editor-shell .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 0.75rem 0;
+  border: 1px solid var(--bx-border);
+}
+.bx-rich-editor-shell .ProseMirror a.bx-editor-link,
+.bx-rich-editor-shell .ProseMirror a {
+  color: var(--bx-brand);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.bx-rich-editor-shell .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--bx-border);
+  margin: 1rem 0;
+}
+
+/* Note view mode (read-only rendered HTML) */
+.bx-note-view .bx-note-view-body {
+  min-height: 18rem;
+  color: var(--bx-text);
+  line-height: 1.65;
+  outline: none;
+}
+.bx-note-view .bx-note-view-body h1 { font-size: 1.75rem; font-weight: 800; margin: 1rem 0 0.5rem; }
+.bx-note-view .bx-note-view-body h2 { font-size: 1.35rem; font-weight: 700; margin: 0.85rem 0 0.4rem; }
+.bx-note-view .bx-note-view-body h3 { font-size: 1.1rem; font-weight: 700; margin: 0.75rem 0 0.35rem; }
+.bx-note-view .bx-note-view-body p { margin: 0.4rem 0; }
+.bx-note-view .bx-note-view-body ul,
+.bx-note-view .bx-note-view-body ol { padding-left: 1.4rem; margin: 0.5rem 0; }
+.bx-note-view .bx-note-view-body blockquote {
+  border-left: 3px solid var(--bx-brand);
+  margin: 0.75rem 0;
+  padding: 0.25rem 0 0.25rem 1rem;
+  color: var(--bx-text-2);
+  font-style: italic;
+}
+.bx-note-view .bx-note-view-body img { max-width: 100%; height: auto; border-radius: 0.5rem; margin: 0.75rem 0; }
+.bx-note-view .bx-note-view-body a { color: var(--bx-brand); text-decoration: underline; }
