@@ -17,7 +17,6 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import ChatWidget from "@/components/ChatWidget";
-import { getHeaderGreeting } from "@/lib/greetings";
 
 const NAV_ALERT_KEYS = {
   "/assigned-tasks": "assigned_tasks",
@@ -183,7 +182,6 @@ export default function Layout() {
   const role = user?.role || "employee";
   const roleLabel = role === "admin" ? "CEO" : role.charAt(0).toUpperCase() + role.slice(1);
   const NAV = ALL_NAV.filter((n) => n.roles.includes(role));
-  const greeting = getHeaderGreeting(user);
 
   const goToResult = (r) => {
     if (navLocked) return;
@@ -260,21 +258,6 @@ export default function Layout() {
                 No matches for "{q}"
               </div>
             )}
-          </div>
-
-          <div
-            className="hidden md:flex flex-1 min-w-0 items-center justify-center px-4"
-            data-testid="header-greeting"
-          >
-            <p className="inline-flex items-center gap-3 min-w-0 max-w-2xl">
-              <span className="text-sm font-semibold text-[var(--bx-text)] whitespace-nowrap shrink-0">
-                {greeting.label} 🚀, {greeting.firstName}
-              </span>
-              <span className="w-px h-4 bg-[var(--bx-border)] shrink-0" aria-hidden />
-              <span className="text-base lg:text-lg italic text-[var(--bx-text-2)] truncate min-w-0">
-                {greeting.quote}
-              </span>
-            </p>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
@@ -368,31 +351,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <div
-          className="sm:hidden px-4 py-1.5 border-b border-[var(--bx-border)] bg-[var(--bx-bg-3)]/40"
-          data-testid="header-greeting-mobile"
-        >
-          <p className="flex items-center gap-2 min-w-0 text-[11px]">
-            <span className="font-semibold text-[var(--bx-text)] whitespace-nowrap shrink-0">
-              {greeting.label} 🚀, {greeting.firstName}
-            </span>
-            <span className="w-px h-3 bg-[var(--bx-border)] shrink-0" aria-hidden />
-            <span className="text-sm italic text-[var(--bx-text-2)] truncate min-w-0">
-              {greeting.quote}
-            </span>
-          </p>
-        </div>
-
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
-          {navLocked && location.pathname === ATTENDANCE_PATH && (
-            <div
-              className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-[var(--bx-text)]"
-              data-testid="check-in-required-banner"
-            >
-              <span className="font-semibold">Check in required.</span>{" "}
-              Use the button below to check in for today. Other modules unlock after check-in.
-            </div>
-          )}
           <Outlet />
         </main>
 
