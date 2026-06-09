@@ -89,3 +89,6 @@ frontend/node_modules/.cache/default-development/5.pack
 credentials.json
 *.key
 .credentials
+
+# Document blob storage (PDF files)
+backend/blob_storage/

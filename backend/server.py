@@ -21,7 +21,8 @@ import bcrypt
 import jwt
 import httpx
 from bedrock_llm import bedrock_chat
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status
+from document_storage import save_pdf, read_pdf, delete_pdf, ensure_dirs as ensure_blob_dirs
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -741,7 +742,110 @@ make_crud("tickets", "tickets",
           notify_event="ticket_update",
           notify_template=lambda d: f"Ticket #{d.get('id','')[:8]}: {d.get('subject','-')} — status: {d.get('status','open')}.")
 
-make_crud("documents", "documents")
+@api.get("/documents", name="list_documents")
+async def list_documents(user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    items = await db.documents.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return items
+
+@api.post("/documents", name="create_documents")
+async def create_document(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    doc = body.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_utc()
+    doc["uploaded_by"] = doc.get("uploaded_by") or user.get("name") or user.get("email")
+    doc["has_file"] = bool(doc.get("blob_key"))
+    await db.documents.insert_one(doc.copy())
+    return strip_id(doc)
+
+@api.post("/documents/upload", name="upload_document")
+async def upload_document(
+    file: UploadFile = File(...),
+    category: str = Form("Other"),
+    client: Optional[str] = Form(None),
+    version: str = Form("v1.0"),
+    user: dict = Depends(require_roles("admin", "manager")),
+):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are allowed")
+    content_type = (file.content_type or "").lower()
+    if content_type and content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
+        raise HTTPException(400, "Only PDF files are allowed")
+    data = await file.read()
+    doc_id = new_id()
+    blob_key = f"{doc_id}.pdf"
+    try:
+        size_bytes = save_pdf(blob_key, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    doc = {
+        "id": doc_id,
+        "name": file.filename,
+        "category": category or "Other",
+        "client": (client or "").strip() or None,
+        "version": version or "v1.0",
+        "size_kb": round(size_bytes / 1024),
+        "uploaded_by": user.get("name") or user.get("email"),
+        "blob_key": blob_key,
+        "mime_type": "application/pdf",
+        "has_file": True,
+        "created_at": now_utc(),
+    }
+    await db.documents.insert_one(doc.copy())
+    return strip_id(doc)
+
+@api.get("/documents/{item_id}", name="get_documents")
+async def get_document(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return doc
+
+@api.get("/documents/{item_id}/file", name="download_document_file")
+async def download_document_file(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    blob_key = doc.get("blob_key")
+    if not blob_key:
+        raise HTTPException(404, "No PDF file attached to this document")
+    try:
+        data = read_pdf(blob_key)
+    except FileNotFoundError:
+        raise HTTPException(404, "PDF file not found in storage")
+    filename = doc.get("name") or f"{item_id}.pdf"
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+@api.put("/documents/{item_id}", name="update_documents")
+async def update_document(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+    updates = body.model_dump()
+    updates.pop("id", None)
+    updates.pop("created_at", None)
+    updates.pop("blob_key", None)
+    updates.pop("has_file", None)
+    updates["updated_at"] = now_utc()
+    result = await db.documents.update_one({"id": item_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
+    return doc
+
+@api.delete("/documents/{item_id}", name="delete_documents")
+async def delete_document(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
+    doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    if doc.get("blob_key"):
+        try:
+            delete_pdf(doc["blob_key"])
+        except Exception:
+            log.exception("blob delete failed for %s", item_id)
+    await db.documents.delete_one({"id": item_id})
+    return {"ok": True}
+
 make_crud("clients", "clients", list_roles=("admin",), write_roles=("admin",))
 
 # Attendance — special model
@@ -1483,10 +1587,10 @@ async def seed():
 
     if await db.documents.count_documents({}) == 0:
         await db.documents.insert_many([
-            {"id": new_id(), "name": "Aurora MSA - signed.pdf", "category": "Contract", "client": "Aurora Retail Pvt Ltd", "version": "v2.1", "size_kb": 845, "uploaded_by": "Bitsparx Admin", "created_at": now_utc()},
-            {"id": new_id(), "name": "Helix Quotation Q1.pdf", "category": "Quotation", "client": "Helix Health Systems", "version": "v1.0", "size_kb": 312, "uploaded_by": "Karan Mehta", "created_at": now_utc()},
-            {"id": new_id(), "name": "Vertex NDA.pdf", "category": "NDA", "client": "Vertex Logistics", "version": "v1.0", "size_kb": 218, "uploaded_by": "Bitsparx Admin", "created_at": now_utc()},
-            {"id": new_id(), "name": "Internal — Employee handbook 2026.pdf", "category": "HR", "client": None, "version": "v3.2", "size_kb": 1240, "uploaded_by": "Priya Manager", "created_at": now_utc()},
+            {"id": new_id(), "name": "Aurora MSA - signed.pdf", "category": "Contract", "client": "Aurora Retail Pvt Ltd", "version": "v2.1", "size_kb": 845, "uploaded_by": "Bitsparx Admin", "has_file": False, "created_at": now_utc()},
+            {"id": new_id(), "name": "Helix Quotation Q1.pdf", "category": "Quotation", "client": "Helix Health Systems", "version": "v1.0", "size_kb": 312, "uploaded_by": "Karan Mehta", "has_file": False, "created_at": now_utc()},
+            {"id": new_id(), "name": "Vertex NDA.pdf", "category": "NDA", "client": "Vertex Logistics", "version": "v1.0", "size_kb": 218, "uploaded_by": "Bitsparx Admin", "has_file": False, "created_at": now_utc()},
+            {"id": new_id(), "name": "Internal — Employee handbook 2026.pdf", "category": "HR", "client": None, "version": "v3.2", "size_kb": 1240, "uploaded_by": "Priya Manager", "has_file": False, "created_at": now_utc()},
         ])
 
     log.info("Seed complete")
@@ -1494,6 +1598,7 @@ async def seed():
 
 @app.on_event("startup")
 async def on_start():
+    ensure_blob_dirs()
     # indexes
     await db.users.create_index("email", unique=True)
     await db.attendance.create_index([("user_id", 1), ("date", 1)])
