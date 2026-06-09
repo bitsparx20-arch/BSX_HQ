@@ -34,7 +34,6 @@ export default function ClientVisits() {
       <PageHeader
         eyebrow="Module · 06"
         title="Client Visits & Location"
-        description="Pin drops, visit logs, geo-tracking and meeting outcomes — visualised on a live map."
       />
 
       <Section title={`Visit Map · ${points.length} pins`} className="mb-6">

@@ -210,7 +210,6 @@ export default function Notes() {
       <PageHeader
         eyebrow="Module · Workspace"
         title="Notes."
-        description="Rich notes with formatting and images. Share with CEO, managers, and employees. Save to view — edit when you need to change something."
         actions={
           <Button onClick={createNote} data-testid="new-note-btn">
             <Plus size={16} className="mr-1.5" /> New note

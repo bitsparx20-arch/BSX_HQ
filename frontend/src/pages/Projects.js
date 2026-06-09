@@ -230,8 +230,11 @@ function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSav
 export default function Projects() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const isEmployee = user?.role === "employee";
   const canWrite = isAdmin || user?.role === "manager";
+  const canCreate = canWrite || isEmployee;
   const [stats, setStats] = useState({});
+  const [teamUsers, setTeamUsers] = useState([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeTab, setActiveTab] = useState("projects-kanban");
   const [detailProject, setDetailProject] = useState(null);
@@ -239,8 +242,24 @@ export default function Projects() {
   const refresh = () => setRefreshKey(k => k + 1);
 
   useEffect(() => {
+    if (isEmployee) {
+      api.get("/projects").then(({ data }) => {
+        setStats({
+          projects: data.length,
+          active_projects: data.filter((p) => ["active", "in_progress"].includes(p.status)).length,
+        });
+      }).catch(() => {});
+      return;
+    }
     api.get("/reports/dashboard").then(({ data }) => setStats(data));
-  }, [refreshKey]);
+  }, [refreshKey, isEmployee]);
+
+  useEffect(() => {
+    if (!canWrite) return;
+    api.get("/users").then(({ data }) => {
+      setTeamUsers((data || []).filter((u) => u.role === "employee"));
+    }).catch(() => {});
+  }, [canWrite]);
 
   const openProject = (p) => {
     setDetailProject(p);
@@ -285,13 +304,54 @@ export default function Projects() {
     { key: "deadline", label: "Deadline", type: "date" },
   ];
 
-  const projectFieldsForUser = isAdmin ? projectFields : projectFields.filter((f) => f.key !== "budget");
+  const projectFieldsForUser = isAdmin
+    ? projectFields
+    : projectFields.filter((f) => f.key !== "budget" && (!isEmployee || !["manager"].includes(f.key)));
   const projectColumnsForUser = isAdmin ? projectColumns : projectColumns.filter((c) => c.key !== "budget");
   const renderProjectCard = (p) => projectCard(p, { showBudget: isAdmin });
 
+  const toggleTeamMember = (setForm, form, userId) => {
+    const current = form.team_member_ids || [];
+    const next = current.includes(userId)
+      ? current.filter((id) => id !== userId)
+      : [...current, userId];
+    setForm({ ...form, team_member_ids: next });
+  };
+
+  const projectFormExtra = ({ form, setForm }) => (
+    canWrite && teamUsers.length > 0 ? (
+      <div className="space-y-2">
+        <Label className="text-xs">Team members</Label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto rounded-lg border border-[var(--bx-border)] p-3">
+          {teamUsers.map((u) => (
+            <label key={u.id} className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(form.team_member_ids || []).includes(u.id)}
+                onChange={() => toggleTeamMember(setForm, form, u.id)}
+                className="rounded border-[var(--bx-border)]"
+              />
+              <span className="truncate">{u.name || u.email}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    ) : null
+  );
+
+  const prepareProjectForm = (row) => ({
+    team_member_ids: row.team_member_ids || [],
+  });
+
   return (
     <div>
-      <PageHeader eyebrow="Module · 03" title="Projects" description="Plan and track projects — click a card to view budget & spend. Drag to update status." />
+      <PageHeader
+        eyebrow="Module · 03"
+        title="Projects"
+        description={isEmployee
+          ? "Your assigned projects — add your own and click a card to view details."
+          : "Plan and track projects."}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
         <KpiCard label="Total" value={stats.projects ?? "—"} />
@@ -305,7 +365,7 @@ export default function Projects() {
             <TabsTrigger value="projects-kanban" data-testid="tab-projects-kanban" className="shrink-0"><Kanban size={14} className="mr-1.5" /> Board</TabsTrigger>
             <TabsTrigger value="projects-list" data-testid="tab-projects-list" className="shrink-0"><ListBullets size={14} className="mr-1.5" /> List</TabsTrigger>
           </TabsList>
-          {canWrite && activeTab === "projects-kanban" && (
+          {canCreate && activeTab === "projects-kanban" && (
             <QuickAdd endpoint="/projects" label="project" fields={projectFieldsForUser} onAdded={refresh} defaults={{ status: "planning" }} />
           )}
         </div>
@@ -330,7 +390,10 @@ export default function Projects() {
             fields={projectFieldsForUser}
             testId="projects"
             canWrite={canWrite}
+            canCreate={canCreate}
             onRowClick={openProject}
+            formExtra={isEmployee ? undefined : projectFormExtra}
+            prepareFormForEdit={prepareProjectForm}
           />
         </TabsContent>
       </Tabs>

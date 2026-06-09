@@ -266,7 +266,7 @@ export default function Finance() {
         title="Project Finance & Expenses."
         description={
           isAdmin
-            ? "Budgets, daily spends, invoices and Profit & Loss. Click an invoice to add amount; PDF download is CEO-only."
+            ? "Budgets, daily spends, invoices and Profit & Loss."
             : "Track daily spends and create invoices. CEO sets amounts and downloads invoice PDFs."
         }
       />

@@ -160,7 +160,6 @@ export default function Documents() {
       <PageHeader
         eyebrow="Module · 10"
         title="Document Manager."
-        description="Upload PDFs via drag-and-drop, store in blob storage, and preview in-browser."
         actions={
           canWrite ? (
             <Button

@@ -73,7 +73,7 @@ export default function Attendance() {
       <PageHeader
         eyebrow="Module · 01"
         title="Attendance."
-        description="Check-in / check-out, leave requests, work hours and approvals — wired to WhatsApp."
+        description="Check-in / check-out."
       />
 
       {/* Today widget */}

@@ -40,10 +40,10 @@ const ALL_NAV = [
   { to: "/crm", label: "Client CRM", icon: Building, group: "Business", roles: ["admin"] },
   { to: "/assets", label: "Asset Master", icon: HardDrives, group: "Resources", roles: ["admin", "manager"] },
   { to: "/amc", label: "AMC & Maintenance", icon: BellRinging, group: "Resources", roles: ["admin", "manager"] },
-  { to: "/documents", label: "Document Manager", icon: FileText, group: "Resources", roles: ["admin", "manager", "employee"] },
+  { to: "/documents", label: "Document Manager", icon: FileText, group: "Resources", roles: ["admin", "manager"] },
   { to: "/helpdesk", label: "Helpdesk / Tickets", icon: Headset, group: "Support", roles: ["admin", "manager", "employee"] },
   { to: "/reports", label: "Reports & Analytics", icon: ChartBar, group: "Support", roles: ["admin", "manager"] },
-  { to: "/notifications", label: "WhatsApp Log", icon: WhatsappLogo, group: "Support", roles: ["admin", "manager", "employee"] },
+  { to: "/notifications", label: "WhatsApp Log", icon: WhatsappLogo, group: "Support", roles: ["admin", "manager"] },
 ];
 
 const ICON_BY_TYPE = {
@@ -139,13 +139,22 @@ export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const searchRef = useRef(null);
 
+  const role = user?.role || "employee";
+  const showSearch = role !== "employee";
+  const showWhatsAppNav = role !== "employee";
+
   useEffect(() => {
-    api.get("/notifications").then(({ data }) => {
-      setNotifs(data.slice(0, 6));
-      setNotifCount(data.length);
-    }).catch(() => {});
+    if (showWhatsAppNav) {
+      api.get("/notifications").then(({ data }) => {
+        setNotifs(data.slice(0, 6));
+        setNotifCount(data.length);
+      }).catch(() => {});
+    } else {
+      setNotifs([]);
+      setNotifCount(0);
+    }
     refreshAlerts();
-  }, [location.pathname, refreshAlerts]);
+  }, [location.pathname, refreshAlerts, showWhatsAppNav]);
 
   useEffect(() => { setDrawerOpen(false); }, [location.pathname]);
 
@@ -157,7 +166,7 @@ export default function Layout() {
   }, [attendanceLoading, checkedInToday, location.pathname, navigate]);
 
   useEffect(() => {
-    if (!q || q.length < 2) { setResults([]); return; }
+    if (!showSearch || !q || q.length < 2) { setResults([]); return; }
     const t = setTimeout(() => {
       api.get(`/search?q=${encodeURIComponent(q)}`).then(({ data }) => {
         setResults(data.results || []);
@@ -165,7 +174,7 @@ export default function Layout() {
       }).catch(() => {});
     }, 250);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, showSearch]);
 
   useEffect(() => {
     const onClick = (e) => {
@@ -179,7 +188,6 @@ export default function Layout() {
     .split(/\s+|@/).filter(Boolean).slice(0, 2)
     .map((s) => s[0].toUpperCase()).join("");
 
-  const role = user?.role || "employee";
   const roleLabel = role === "admin" ? "CEO" : role.charAt(0).toUpperCase() + role.slice(1);
   const NAV = ALL_NAV.filter((n) => n.roles.includes(role));
 
@@ -219,46 +227,50 @@ export default function Layout() {
             <List size={18} className="text-[var(--bx-text)]" />
           </button>
 
-          <div ref={searchRef} className="relative flex items-center gap-3 flex-1 max-w-xl">
-            <MagnifyingGlass size={16} className="text-[var(--bx-text-3)] absolute left-3" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onFocus={() => results.length > 0 && setShowResults(true)}
-              placeholder={navLocked ? "Check in to search…" : "Search projects, clients, employees…"}
-              disabled={navLocked}
-              className="w-full bg-[var(--bx-bg-3)] hover:bg-[var(--bx-bg-2)] focus:bg-[var(--bx-card)] focus:ring-2 focus:ring-[var(--bx-brand)]/30 focus:border-[var(--bx-brand)] border border-[var(--bx-border)] rounded-lg pl-9 pr-3 h-9 text-sm placeholder:text-[var(--bx-text-3)] text-[var(--bx-text)] outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
-              data-testid="global-search"
-            />
-            {showResults && results.length > 0 && (
-              <div className="absolute top-11 left-0 right-0 bg-[var(--bx-card)] border border-[var(--bx-border)] rounded-lg shadow-lg max-h-96 overflow-y-auto z-50" data-testid="search-results">
-                {results.map((r, idx) => {
-                  const Icon = ICON_BY_TYPE[r.type] || Briefcase;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => goToResult(r)}
-                      className="w-full text-left px-3 py-2.5 hover:bg-[var(--bx-bg-3)] flex items-center gap-3 border-b border-[var(--bx-border)] last:border-0"
-                    >
-                      <div className="w-8 h-8 rounded-md bg-[var(--bx-bg-3)] grid place-items-center">
-                        <Icon size={14} className="text-[var(--bx-text-2)]" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold text-[var(--bx-text)] truncate">{r.title}</div>
-                        <div className="text-xs text-[var(--bx-text-3)] truncate">{r.subtitle}</div>
-                      </div>
-                      <span className="text-[10px] bx-mono uppercase tracking-widest text-[var(--bx-text-3)] hidden sm:inline">{r.type}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {showResults && q.length >= 2 && results.length === 0 && (
-              <div className="absolute top-11 left-0 right-0 bg-[var(--bx-card)] border border-[var(--bx-border)] rounded-lg shadow-lg p-6 text-center text-sm text-[var(--bx-text-3)] z-50">
-                No matches for "{q}"
-              </div>
-            )}
-          </div>
+          {showSearch ? (
+            <div ref={searchRef} className="relative flex items-center gap-3 flex-1 max-w-xl">
+              <MagnifyingGlass size={16} className="text-[var(--bx-text-3)] absolute left-3" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onFocus={() => results.length > 0 && setShowResults(true)}
+                placeholder={navLocked ? "Check in to search…" : "Search projects, clients, employees…"}
+                disabled={navLocked}
+                className="w-full bg-[var(--bx-bg-3)] hover:bg-[var(--bx-bg-2)] focus:bg-[var(--bx-card)] focus:ring-2 focus:ring-[var(--bx-brand)]/30 focus:border-[var(--bx-brand)] border border-[var(--bx-border)] rounded-lg pl-9 pr-3 h-9 text-sm placeholder:text-[var(--bx-text-3)] text-[var(--bx-text)] outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="global-search"
+              />
+              {showResults && results.length > 0 && (
+                <div className="absolute top-11 left-0 right-0 bg-[var(--bx-card)] border border-[var(--bx-border)] rounded-lg shadow-lg max-h-96 overflow-y-auto z-50" data-testid="search-results">
+                  {results.map((r, idx) => {
+                    const Icon = ICON_BY_TYPE[r.type] || Briefcase;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => goToResult(r)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-[var(--bx-bg-3)] flex items-center gap-3 border-b border-[var(--bx-border)] last:border-0"
+                      >
+                        <div className="w-8 h-8 rounded-md bg-[var(--bx-bg-3)] grid place-items-center">
+                          <Icon size={14} className="text-[var(--bx-text-2)]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-[var(--bx-text)] truncate">{r.title}</div>
+                          <div className="text-xs text-[var(--bx-text-3)] truncate">{r.subtitle}</div>
+                        </div>
+                        <span className="text-[10px] bx-mono uppercase tracking-widest text-[var(--bx-text-3)] hidden sm:inline">{r.type}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {showResults && q.length >= 2 && results.length === 0 && (
+                <div className="absolute top-11 left-0 right-0 bg-[var(--bx-card)] border border-[var(--bx-border)] rounded-lg shadow-lg p-6 text-center text-sm text-[var(--bx-text-3)] z-50">
+                  No matches for "{q}"
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1" />
+          )}
 
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -270,6 +282,7 @@ export default function Layout() {
               {theme === "dark" ? <Sun size={18} weight="regular" className="text-[var(--bx-text)]" /> : <Moon size={18} weight="regular" className="text-[var(--bx-text)]" />}
             </button>
 
+            {showWhatsAppNav && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="relative h-9 w-9 grid place-items-center rounded-lg hover:bg-[var(--bx-bg-3)] transition" data-testid="notifications-bell">
@@ -311,6 +324,7 @@ export default function Layout() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            )}
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -355,7 +369,7 @@ export default function Layout() {
           <Outlet />
         </main>
 
-        {!navLocked && <ChatWidget />}
+        {!navLocked && user?.role === "admin" && <ChatWidget />}
       </div>
     </div>
   );

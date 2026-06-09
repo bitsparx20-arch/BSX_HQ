@@ -257,12 +257,14 @@ async def logout(response: Response):
 # Generic CRUD factory
 # ──────────────────────────────────────────────────────────────────────────────
 def make_crud(path: str, collection: str, notify_event: Optional[str] = None,
-              notify_template=None, list_roles=None, write_roles=None):
+              notify_template=None, list_roles=None, write_roles=None, create_roles=None,
+              on_create=None):
     """
     Registers POST /{path}, GET /{path}, GET /{path}/{id}, PUT /{path}/{id}, DELETE /{path}/{id}
     """
     list_roles = list_roles or ("admin", "manager", "employee")
     write_roles = write_roles or ("admin", "manager")
+    create_roles = create_roles or write_roles
 
     @api.get(f"/{path}", name=f"list_{collection}")
     async def list_items(user: dict = Depends(require_roles(*list_roles))):
@@ -270,11 +272,15 @@ def make_crud(path: str, collection: str, notify_event: Optional[str] = None,
         return items
 
     @api.post(f"/{path}", name=f"create_{collection}")
-    async def create_item(body: GenericDoc, user: dict = Depends(require_roles(*write_roles))):
+    async def create_item(body: GenericDoc, user: dict = Depends(require_roles(*create_roles))):
         doc = body.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_utc()
         doc["created_by"] = user["id"]
+        doc["created_by_role"] = user.get("role")
+        doc["created_by_name"] = user.get("name") or user.get("email")
+        if on_create:
+            on_create(doc, user)
         await db[collection].insert_one(doc.copy())
         if notify_event and notify_template:
             try:
@@ -435,20 +441,81 @@ def _sanitize_project_for_role(doc: dict, user: dict) -> dict:
         out.pop("created_by_role", None)
     return out
 
+async def _sync_project_team_members(doc: dict) -> dict:
+    raw = doc.get("team_member_ids")
+    if raw is None:
+        return doc
+    ids = raw if isinstance(raw, list) else [s.strip() for s in str(raw).split(",") if s.strip()]
+    doc["team_member_ids"] = ids
+    names = []
+    for mid in ids:
+        u = await db.users.find_one({"id": mid}, {"_id": 0, "name": 1, "email": 1})
+        if u:
+            names.append(u.get("name") or u.get("email"))
+    doc["team_members"] = names
+    return doc
+
+async def _assigned_project_ids(user: dict) -> list[str]:
+    uid = user["id"]
+    name = user.get("name") or ""
+    email = user.get("email") or ""
+    ids: set[str] = set()
+
+    for p in await db.projects.find({
+        "$or": [
+            {"team_member_ids": uid},
+            {"team_members": {"$in": [name, email]}},
+            {"created_by": uid},
+        ]
+    }, {"_id": 0, "id": 1}).to_list(1000):
+        ids.add(p["id"])
+
+    task_filter = {"$or": []}
+    for key in (name, email):
+        if key:
+            task_filter["$or"].append({"assignee": key})
+    if task_filter["$or"]:
+        tasks = await db.tasks.find(task_filter, {"_id": 0, "project": 1}).to_list(5000)
+        project_names = list({t.get("project") for t in tasks if t.get("project")})
+        if project_names:
+            for p in await db.projects.find({"name": {"$in": project_names}}, {"_id": 0, "id": 1}).to_list(1000):
+                ids.add(p["id"])
+
+    return list(ids)
+
+async def _ensure_project_access(user: dict, project: dict):
+    if user.get("role") != "employee":
+        return
+    if project.get("id") not in await _assigned_project_ids(user):
+        raise HTTPException(404, "Not found")
+
 @api.get("/projects", name="list_projects")
 async def list_projects(user: dict = Depends(require_roles("admin", "manager", "employee"))):
-    items = await db.projects.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    if user["role"] == "employee":
+        allowed = await _assigned_project_ids(user)
+        query = {"id": {"$in": allowed}} if allowed else {"id": {"$in": []}}
+    else:
+        query = {}
+    items = await db.projects.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return [_sanitize_project_for_role(i, user) for i in items]
 
 @api.post("/projects", name="create_projects")
-async def create_project(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
+async def create_project(body: GenericDoc, user: dict = Depends(require_roles("admin", "manager", "employee"))):
     doc = body.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = now_utc()
     doc["created_by"] = user["id"]
     doc["created_by_role"] = user["role"]
     doc["created_by_name"] = user.get("name") or user.get("email")
-    if user["role"] != "admin":
+    if user["role"] == "employee":
+        doc.pop("budget", None)
+        doc["budget"] = None
+        doc["budget_set"] = False
+        member_ids = list(doc.get("team_member_ids") or [])
+        if user["id"] not in member_ids:
+            member_ids.append(user["id"])
+        doc["team_member_ids"] = member_ids
+    elif user["role"] != "admin":
         doc.pop("budget", None)
         doc["budget"] = None
         doc["budget_set"] = False
@@ -461,6 +528,7 @@ async def create_project(body: GenericDoc, user: dict = Depends(require_roles("a
         else:
             doc["budget"] = None
             doc["budget_set"] = False
+    await _sync_project_team_members(doc)
     await db.projects.insert_one(doc.copy())
     try:
         phone = doc.get("phone") or doc.get("contact_phone") or os.environ.get("ADMIN_PHONE", "919999999999")
@@ -475,6 +543,7 @@ async def get_project(item_id: str, user: dict = Depends(require_roles("admin", 
     doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
+    await _ensure_project_access(user, doc)
     return _sanitize_project_for_role(doc, user)
 
 @api.put("/projects/{item_id}", name="update_projects")
@@ -492,6 +561,8 @@ async def update_project(item_id: str, body: GenericDoc, user: dict = Depends(re
     elif "budget" in updates:
         updates.pop("budget", None)
     updates["updated_at"] = now_utc()
+    if "team_member_ids" in updates:
+        await _sync_project_team_members(updates)
     result = await db.projects.update_one({"id": item_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(404, "Not found")
@@ -525,6 +596,7 @@ async def project_finance(item_id: str, user: dict = Depends(require_roles("admi
     project = await db.projects.find_one({"id": item_id}, {"_id": 0})
     if not project:
         raise HTTPException(404, "Not found")
+    await _ensure_project_access(user, project)
     name = project.get("name") or ""
     expenses = await db.expenses.find({"project": name}, {"_id": 0}).to_list(5000)
     spent = round(sum(float(e.get("amount") or 0) for e in expenses), 2)
@@ -727,7 +799,8 @@ async def delete_invoice(item_id: str, user: dict = Depends(require_roles("admin
 
 make_crud("meetings", "meetings",
           notify_event="meeting_scheduled",
-          notify_template=lambda d: f"Meeting '{d.get('title','-')}' scheduled on {d.get('start_at','TBD')}.")
+          notify_template=lambda d: f"Meeting '{d.get('title','-')}' scheduled on {d.get('start_at','TBD')}.",
+          write_roles=("admin", "manager", "employee"))
 
 make_crud("visits", "visits",
           notify_event="client_visit",
@@ -738,9 +811,18 @@ make_crud("amc", "amc",
           notify_event="amc_renewal",
           notify_template=lambda d: f"AMC '{d.get('title','-')}' renewal due on {d.get('renewal_date','-')}.")
 
+def _ticket_on_create(doc: dict, user: dict):
+    if user.get("role") == "employee":
+        doc["assigned_to"] = user.get("name") or user.get("email")
+        doc.setdefault("status", "open")
+        doc.setdefault("sla_hours", 24)
+
 make_crud("tickets", "tickets",
           notify_event="ticket_update",
-          notify_template=lambda d: f"Ticket #{d.get('id','')[:8]}: {d.get('subject','-')} — status: {d.get('status','open')}.")
+          notify_template=lambda d: f"Ticket #{d.get('id','')[:8]}: {d.get('subject','-')} — status: {d.get('status','open')}.",
+          write_roles=("admin", "manager"),
+          create_roles=("admin", "manager", "employee"),
+          on_create=_ticket_on_create)
 
 @api.get("/documents", name="list_documents")
 async def list_documents(user: dict = Depends(require_roles("admin", "manager", "employee"))):
@@ -953,7 +1035,7 @@ ASSIGNED_TASK_STATUSES = ("todo", "in_progress", "review", "done")
 class AssignedTaskInput(BaseModel):
     title: str
     description: Optional[str] = None
-    assignee_id: str
+    assignee_id: Optional[str] = None
     task_date: str
     status: Optional[str] = "todo"
     priority: Optional[str] = "medium"
@@ -969,10 +1051,17 @@ async def list_assigned_tasks(task_date: Optional[str] = None, user: dict = Depe
     return items
 
 @api.post("/assigned-tasks")
-async def create_assigned_task(body: AssignedTaskInput, user: dict = Depends(require_roles("admin"))):
-    assignee = await db.users.find_one({"id": body.assignee_id}, {"_id": 0, "password_hash": 0})
-    if not assignee:
-        raise HTTPException(404, "Assignee not found")
+async def create_assigned_task(body: AssignedTaskInput, user: dict = Depends(get_current_user)):
+    if user["role"] == "admin":
+        if not body.assignee_id:
+            raise HTTPException(400, "Assignee is required")
+        assignee = await db.users.find_one({"id": body.assignee_id}, {"_id": 0, "password_hash": 0})
+        if not assignee:
+            raise HTTPException(404, "Assignee not found")
+    elif user["role"] == "employee":
+        assignee = user
+    else:
+        raise HTTPException(403, "Insufficient permissions")
     doc = {
         "id": new_id(),
         "title": body.title.strip(),

@@ -12,9 +12,10 @@ import PasswordInput from "@/components/PasswordInput";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
-export default function ModuleTable({ endpoint, columns, fields, title, testId, canWrite, onRowClick, transformPayload, prepareFormForEdit, formExtra }) {
+export default function ModuleTable({ endpoint, columns, fields, title, testId, canWrite, canCreate, onRowClick, transformPayload, prepareFormForEdit, formExtra }) {
   const { user } = useAuth();
   const writable = canWrite ?? (user?.role === "admin" || user?.role === "manager");
+  const creatable = canCreate ?? writable;
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -34,7 +35,7 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
 
   const openCreate = () => {
     setEditing(null);
-    const initial = {};
+    const initial = { team_member_ids: [] };
     fields.forEach((f) => {
       initial[f.key] = f.default ?? "";
       if (f.allowCustom && f.customKey) initial[f.customKey] = "";
@@ -105,6 +106,7 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
         }
       });
       const allowed = new Set(fields.flatMap((f) => [f.key, f.customKey].filter(Boolean)));
+      allowed.add("team_member_ids");
       Object.keys(payload).forEach((k) => {
         if (!allowed.has(k)) delete payload[k];
       });
@@ -144,7 +146,7 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
               data-testid={`${testId}-search`}
             />
           </div>
-          {writable && (
+          {creatable && (
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="bg-[var(--bx-brand)] hover:opacity-90 text-white" onClick={openCreate} data-testid={`${testId}-add`}>
@@ -199,7 +201,7 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
                     </div>
                   ))}
                   {formExtra && (
-                    <div className="sm:col-span-2">{formExtra(form)}</div>
+                    <div className="sm:col-span-2">{formExtra({ form, setForm, editing: !!editing })}</div>
                   )}
                 </div>
                 <DialogFooter className="pt-4 mt-auto">

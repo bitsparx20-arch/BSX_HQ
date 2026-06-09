@@ -12,18 +12,37 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Plus, VideoCamera, MapPin, Clock } from "@phosphor-icons/react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { getMeetingLink, upcomingMeetings } from "@/lib/meetings";
+import { getMeetingLink, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
 
 const locales = { "en-US": enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
 
-const blank = { title: "", start_at: "", end_at: "", location: "", meeting_link: "", attendees: "", recurring: "none", description: "" };
+const blank = { title: "", start_at: "", end_at: "", location: "", meeting_link: "", attendee_ids: [], recurring: "none", description: "" };
+
+function resolveAttendeeIds(attendees, people) {
+  const names = Array.isArray(attendees) ? attendees : (attendees ? [attendees] : []);
+  return people.filter((p) => names.some((n) => {
+    const key = String(n || "").toLowerCase();
+    return key === (p.name || "").toLowerCase() || key === (p.email || "").toLowerCase();
+  })).map((p) => p.id);
+}
+
+function attendeeNames(ids, people) {
+  return (ids || []).map((id) => {
+    const p = people.find((x) => x.id === id);
+    return p?.name || p?.email;
+  }).filter(Boolean);
+}
 
 export default function Meetings() {
   const { user } = useAuth();
-  const canWrite = user?.role === "admin" || user?.role === "manager";
+  const canManage = user?.role === "admin" || user?.role === "manager";
+  const canCreate = true;
+  const canEditMeeting = (m) => canManage || !m || m.created_by === user?.id;
   const [meetings, setMeetings] = useState([]);
+  const [companyPeople, setCompanyPeople] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(blank);
   const [selected, setSelected] = useState(null);
@@ -42,16 +61,33 @@ export default function Meetings() {
   };
   useEffect(() => { load(); }, []);
 
-  const events = useMemo(() => meetings.map((m) => {
-    const start = m.start_at ? new Date(m.start_at) : new Date();
-    const end = m.end_at ? new Date(m.end_at) : new Date(start.getTime() + 60 * 60 * 1000);
-    return {
-      id: m.id,
-      title: m.title,
-      start, end,
-      resource: m,
-    };
-  }), [meetings]);
+  useEffect(() => {
+    api.get("/notes/share-targets").then(({ data }) => setCompanyPeople(data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!selected || companyPeople.length === 0) return;
+    setForm((prev) => ({
+      ...prev,
+      attendee_ids: resolveAttendeeIds(selected.attendees, companyPeople),
+    }));
+  }, [companyPeople, selected]);
+
+  const events = useMemo(() => {
+    const { from, to } = calendarRange(date, view);
+    return expandRecurringMeetings(meetings, { from, to }).map((e) => ({
+      id: `${e.meeting.id}-${e.occurrenceIndex}`,
+      title: e.meeting.title,
+      start: e.start,
+      end: e.end,
+      resource: {
+        ...e.meeting,
+        _occurrenceStart: e.start,
+        _occurrenceEnd: e.end,
+        _occurrenceIndex: e.occurrenceIndex,
+      },
+    }));
+  }, [meetings, date, view]);
 
   const openCreate = (slot) => {
     setSelected(null);
@@ -64,21 +100,37 @@ export default function Meetings() {
   };
 
   const openEvent = (ev) => {
-    setSelected(ev.resource);
+    const resource = ev.resource || ev;
+    const start = resource._occurrenceStart || (resource.start_at ? new Date(resource.start_at) : null);
+    const end = resource._occurrenceEnd || (resource.end_at ? new Date(resource.end_at) : null);
+    setSelected(resource);
     setForm({
-      ...ev.resource,
-      start_at: ev.resource.start_at ? toLocalInput(new Date(ev.resource.start_at)) : "",
-      end_at: ev.resource.end_at ? toLocalInput(new Date(ev.resource.end_at)) : "",
-      attendees: Array.isArray(ev.resource.attendees) ? ev.resource.attendees.join(", ") : ev.resource.attendees || "",
+      ...resource,
+      start_at: start ? toLocalInput(start) : "",
+      end_at: end ? toLocalInput(end) : "",
+      attendee_ids: resolveAttendeeIds(resource.attendees, companyPeople),
     });
     setOpen(true);
   };
 
+  const editing = selected && canEditMeeting(selected);
+
+  const toggleAttendee = (personId) => {
+    setForm((prev) => {
+      const current = prev.attendee_ids || [];
+      const next = current.includes(personId)
+        ? current.filter((id) => id !== personId)
+        : [...current, personId];
+      return { ...prev, attendee_ids: next };
+    });
+  };
+
   const save = async () => {
     try {
+      const { attendee_ids, ...rest } = form;
       const payload = {
-        ...form,
-        attendees: form.attendees ? form.attendees.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        ...rest,
+        attendees: attendeeNames(attendee_ids, companyPeople),
       };
       if (selected) await api.put(`/meetings/${selected.id}`, payload);
       else await api.post("/meetings", payload);
@@ -107,7 +159,7 @@ export default function Meetings() {
         title="Meetings & Calendar"
         
         actions={
-          canWrite ? (
+          canCreate ? (
             <Button onClick={() => openCreate()} className="bg-[var(--bx-brand)] hover:opacity-90 text-white" data-testid="new-meeting-btn">
               <Plus size={14} weight="bold" className="mr-1.5" /> New meeting
             </Button>
@@ -123,8 +175,8 @@ export default function Meetings() {
             startAccessor="start"
             endAccessor="end"
             style={{ height: 640 }}
-            selectable={canWrite}
-            onSelectSlot={canWrite ? openCreate : undefined}
+            selectable={canCreate}
+            onSelectSlot={canCreate ? openCreate : undefined}
             onSelectEvent={openEvent}
             views={["month", "week", "day", "agenda"]}
             defaultView="week"
@@ -174,37 +226,66 @@ export default function Meetings() {
       <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setSelected(null); setForm(blank); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{selected ? "Edit meeting" : "New meeting"}</DialogTitle>
-            <DialogDescription>Schedule a meeting and notify attendees via WhatsApp.</DialogDescription>
+            <DialogTitle>{selected ? (editing ? "Edit meeting" : "Meeting details") : "New meeting"}</DialogTitle>
+            <DialogDescription>
+              {selected && !editing ? "View-only — you can edit meetings you scheduled." : "Schedule a meeting and notify attendees via WhatsApp."}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <Label className="text-xs">Title *</Label>
-              <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Project sync" data-testid="meeting-title" />
+              <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Project sync" data-testid="meeting-title" readOnly={!editing && !!selected} />
             </div>
             <div>
               <Label className="text-xs">Start</Label>
-              <Input type="datetime-local" value={form.start_at} onChange={(e) => setForm({ ...form, start_at: e.target.value })} />
+              <Input type="datetime-local" value={form.start_at} onChange={(e) => setForm({ ...form, start_at: e.target.value })} readOnly={!editing && !!selected} />
             </div>
             <div>
               <Label className="text-xs">End</Label>
-              <Input type="datetime-local" value={form.end_at} onChange={(e) => setForm({ ...form, end_at: e.target.value })} />
+              <Input type="datetime-local" value={form.end_at} onChange={(e) => setForm({ ...form, end_at: e.target.value })} readOnly={!editing && !!selected} />
             </div>
             <div className="col-span-2">
               <Label className="text-xs">Location</Label>
-              <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Main Auditorium, Meet Room A…" />
+              <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Main Auditorium, Meet Room A…" readOnly={!editing && !!selected} />
             </div>
             <div className="col-span-2">
               <Label className="text-xs">Meeting link</Label>
-              <Input value={form.meeting_link} onChange={(e) => setForm({ ...form, meeting_link: e.target.value })} placeholder="https://zoom.us/j/… or Google Meet link" />
+              <Input value={form.meeting_link} onChange={(e) => setForm({ ...form, meeting_link: e.target.value })} placeholder="https://zoom.us/j/… or Google Meet link" readOnly={!editing && !!selected} />
             </div>
             <div className="col-span-2">
-              <Label className="text-xs">Attendees (comma separated)</Label>
-              <Input value={form.attendees} onChange={(e) => setForm({ ...form, attendees: e.target.value })} placeholder="Riya Sharma, Vikram Iyer" />
+              <Label className="text-xs">Attendees</Label>
+              {(!editing && selected) ? (
+                <div className="rounded-lg border border-[var(--bx-border)] p-3 text-sm text-[var(--bx-text-2)] min-h-[2.5rem]">
+                  {attendeeNames(form.attendee_ids, companyPeople).length > 0
+                    ? attendeeNames(form.attendee_ids, companyPeople).join(", ")
+                    : (Array.isArray(selected?.attendees) ? selected.attendees.join(", ") : selected?.attendees) || "—"}
+                </div>
+              ) : (
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-[var(--bx-border)] p-2 space-y-1" data-testid="meeting-attendees">
+                  {companyPeople.length === 0 && (
+                    <p className="text-sm text-[var(--bx-text-3)] text-center py-3">No team members found.</p>
+                  )}
+                  {companyPeople.map((p) => (
+                    <label
+                      key={p.id}
+                      className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-[var(--bx-bg-3)] cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={(form.attendee_ids || []).includes(p.id)}
+                        onCheckedChange={() => toggleAttendee(p.id)}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-[var(--bx-text)] truncate">{p.name || p.email}</div>
+                        <div className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">{p.role}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="col-span-2">
               <Label className="text-xs">Recurring</Label>
-              <Select value={form.recurring} onValueChange={(v) => setForm({ ...form, recurring: v })}>
+              <Select value={form.recurring} onValueChange={(v) => setForm({ ...form, recurring: v })} disabled={!editing && !!selected}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">No repeat</SelectItem>
@@ -216,15 +297,17 @@ export default function Meetings() {
             </div>
             <div className="col-span-2">
               <Label className="text-xs">Description</Label>
-              <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} />
+              <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} readOnly={!editing && !!selected} />
             </div>
           </div>
           <DialogFooter>
-            {selected && <Button variant="outline" onClick={remove} className="mr-auto text-rose-600 border-rose-200 hover:bg-rose-50">Delete</Button>}
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} className="bg-[var(--bx-brand)] hover:opacity-90 text-white" data-testid="meeting-save">
-              {selected ? "Update" : "Schedule"}
-            </Button>
+            {selected && editing && <Button variant="outline" onClick={remove} className="mr-auto text-rose-600 border-rose-200 hover:bg-rose-50">Delete</Button>}
+            <Button variant="outline" onClick={() => setOpen(false)}>{editing || !selected ? "Cancel" : "Close"}</Button>
+            {(editing || !selected) && (
+              <Button onClick={save} className="bg-[var(--bx-brand)] hover:opacity-90 text-white" data-testid="meeting-save">
+                {selected ? "Update" : "Schedule"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -39,7 +39,7 @@ export default function AMC() {
 
   return (
     <div>
-      <PageHeader eyebrow="Module · 08" title="AMC & Maintenance." description="Annual contracts, renewal alerts and service due dates — auto-reminders via WhatsApp." />
+      <PageHeader eyebrow="Module · 08" title="AMC & Maintenance." />
       <ModuleTable
         endpoint="/amc"
         title="Contracts"

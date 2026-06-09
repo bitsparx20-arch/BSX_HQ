@@ -47,6 +47,7 @@ export default function AssignedTasks() {
   const { user } = useAuth();
   const { refresh: refreshAlerts } = useSidebarAlerts();
   const isAdmin = user?.role === "admin";
+  const isEmployee = user?.role === "employee";
   const [taskDate, setTaskDate] = useState(todayStr());
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
@@ -84,13 +85,20 @@ export default function AssignedTasks() {
   };
 
   const assignTask = async () => {
-    if (!form.title.trim() || !form.assignee_id) {
-      toast.error("Title and assignee are required");
+    if (!form.title.trim()) {
+      toast.error("Title is required");
+      return;
+    }
+    if (isAdmin && !form.assignee_id) {
+      toast.error("Assignee is required");
       return;
     }
     try {
-      await api.post("/assigned-tasks", form);
-      toast.success("Task assigned");
+      const payload = isEmployee
+        ? { title: form.title, description: form.description, task_date: form.task_date, priority: form.priority }
+        : form;
+      await api.post("/assigned-tasks", payload);
+      toast.success(isEmployee ? "Task added" : "Task assigned");
       setAssignOpen(false);
       setForm({ title: "", description: "", assignee_id: "", task_date: taskDate, priority: "medium" });
       if (form.task_date === taskDate) load();
@@ -115,14 +123,14 @@ export default function AssignedTasks() {
         eyebrow="Module · Workspace"
         title="Assigned Tasks."
         description={
-          isAdmin
-            ? "Assign day-by-day tasks to your team. Drag cards across columns to track progress."
-            : "Your daily tasks assigned by leadership. Drag cards to update your progress."
+          isEmployee
+            ? "Your daily tasks — add your own or complete ones from leadership. Drag cards to update progress."
+            : undefined
         }
         actions={
-          isAdmin ? (
+          (isAdmin || isEmployee) ? (
             <Button onClick={() => { setForm((f) => ({ ...f, task_date: taskDate })); setAssignOpen(true); }} data-testid="assign-task-btn">
-              <Plus size={16} className="mr-1.5" /> Assign task
+              <Plus size={16} className="mr-1.5" /> {isEmployee ? "Add task" : "Assign task"}
             </Button>
           ) : null
         }
@@ -174,7 +182,7 @@ export default function AssignedTasks() {
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Assign daily task</DialogTitle>
+            <DialogTitle>{isEmployee ? "Add your task" : "Assign daily task"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
@@ -195,6 +203,7 @@ export default function AssignedTasks() {
                 rows={3}
               />
             </div>
+            {isAdmin && (
             <div>
               <Label>Assign to</Label>
               <Select value={form.assignee_id} onValueChange={(v) => setForm((f) => ({ ...f, assignee_id: v }))}>
@@ -210,6 +219,7 @@ export default function AssignedTasks() {
                 </SelectContent>
               </Select>
             </div>
+            )}
             <div>
               <Label>Priority</Label>
               <Select value={form.priority} onValueChange={(v) => setForm((f) => ({ ...f, priority: v }))}>
@@ -234,7 +244,7 @@ export default function AssignedTasks() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
-            <Button onClick={assignTask} data-testid="assign-submit">Assign</Button>
+            <Button onClick={assignTask} data-testid="assign-submit">{isEmployee ? "Add" : "Assign"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

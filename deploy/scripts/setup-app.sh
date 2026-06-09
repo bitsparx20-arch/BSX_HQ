@@ -6,6 +6,17 @@ APP_DIR=/opt/bitsparx-hq
 PUBLIC_URL="${PUBLIC_URL:-http://147.93.104.138}"
 APP_DOMAIN="${APP_DOMAIN:-}"
 
+if [[ -z "$APP_DOMAIN" && -f /etc/bitsparx-hq.env ]]; then
+  APP_DOMAIN=$(grep -E '^APP_DOMAIN=' /etc/bitsparx-hq.env 2>/dev/null | cut -d= -f2- | tr -d '\r"' | xargs || true)
+fi
+
+# Redeploy must not wipe certbot SSL — re-apply domain + HTTPS when already configured.
+if [[ -n "$APP_DOMAIN" && -d "/etc/letsencrypt/live/${APP_DOMAIN}" ]]; then
+  echo "==> SSL cert found for ${APP_DOMAIN} — running configure-domain..."
+  export APP_DOMAIN PUBLIC_URL="https://${APP_DOMAIN}"
+  exec bash "$APP_DIR/deploy/scripts/configure-domain.sh" "$APP_DOMAIN"
+fi
+
 nginx_server_names() {
   local names="147.93.104.138 _"
   if [[ -n "$APP_DOMAIN" ]]; then
