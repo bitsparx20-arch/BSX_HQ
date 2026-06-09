@@ -825,7 +825,7 @@ make_crud("tickets", "tickets",
           on_create=_ticket_on_create)
 
 @api.get("/documents", name="list_documents")
-async def list_documents(user: dict = Depends(require_roles("admin", "manager", "employee"))):
+async def list_documents(user: dict = Depends(require_roles("admin", "manager"))):
     items = await db.documents.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return items
 
@@ -876,14 +876,14 @@ async def upload_document(
     return strip_id(doc)
 
 @api.get("/documents/{item_id}", name="get_documents")
-async def get_document(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+async def get_document(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
     doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
     return doc
 
 @api.get("/documents/{item_id}/file", name="download_document_file")
-async def download_document_file(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+async def download_document_file(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
     doc = await db.documents.find_one({"id": item_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
@@ -1433,7 +1433,9 @@ async def global_search(q: str, user: dict = Depends(get_current_user)):
     pattern = {"$regex": q, "$options": "i"}
     results = []
     searchable = SEARCH_COLLECTIONS
-    if user.get("role") != "admin":
+    if user.get("role") == "employee":
+        searchable = {k: v for k, v in SEARCH_COLLECTIONS.items() if k not in ("clients", "documents")}
+    elif user.get("role") != "admin":
         searchable = {k: v for k, v in SEARCH_COLLECTIONS.items() if k != "clients"}
     for col, (title_field, fields, route) in searchable.items():
         or_filter = [{f: pattern} for f in fields]
