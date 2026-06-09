@@ -52,6 +52,20 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
+const ManagerAdminRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bx-bg-2)]">
+        <div className="text-[var(--bx-text-3)] bx-mono text-sm">Loading Bitsparx HQ…</div>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== "admin" && user.role !== "manager") return <Navigate to="/" replace />;
+  return children;
+};
+
 function App() {
   return (
     <div className="App">
@@ -85,7 +99,7 @@ function App() {
                 <Route path="assets" element={<Assets />} />
                 <Route path="amc" element={<AMC />} />
                 <Route path="helpdesk" element={<Helpdesk />} />
-                <Route path="documents" element={<Documents />} />
+                <Route path="documents" element={<ManagerAdminRoute><Documents /></ManagerAdminRoute>} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="crm" element={<AdminRoute><CRM /></AdminRoute>} />
                 <Route path="notifications" element={<Notifications />} />

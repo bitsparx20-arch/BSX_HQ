@@ -40,7 +40,7 @@ const ALL_NAV = [
   { to: "/crm", label: "Client CRM", icon: Building, group: "Business", roles: ["admin"] },
   { to: "/assets", label: "Asset Master", icon: HardDrives, group: "Resources", roles: ["admin", "manager"] },
   { to: "/amc", label: "AMC & Maintenance", icon: BellRinging, group: "Resources", roles: ["admin", "manager"] },
-  { to: "/documents", label: "Document Manager", icon: FileText, group: "Resources", roles: ["admin", "manager", "employee"] },
+  { to: "/documents", label: "Document Manager", icon: FileText, group: "Resources", roles: ["admin", "manager"] },
   { to: "/helpdesk", label: "Helpdesk / Tickets", icon: Headset, group: "Support", roles: ["admin", "manager", "employee"] },
   { to: "/reports", label: "Reports & Analytics", icon: ChartBar, group: "Support", roles: ["admin", "manager"] },
   { to: "/notifications", label: "WhatsApp Log", icon: WhatsappLogo, group: "Support", roles: ["admin", "manager", "employee"] },
