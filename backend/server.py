@@ -793,26 +793,52 @@ async def get_project(item_id: str, user: dict = Depends(require_roles("admin", 
     await _ensure_project_access(user, doc)
     return _sanitize_project_for_role(doc, user)
 
+EMPLOYEE_PROJECT_FIELDS = frozenset({
+    "name", "client", "status", "progress", "start_date", "deadline", "parts", "description",
+})
+
 @api.put("/projects/{item_id}", name="update_projects")
-async def update_project(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager"))):
-    updates = body.model_dump()
-    updates.pop("id", None)
-    updates.pop("created_at", None)
-    updates.pop("created_by", None)
-    updates.pop("created_by_role", None)
-    updates.pop("created_by_name", None)
-    updates.pop("budget_set", None)
-    updates.pop("budget_set_by", None)
-    if user["role"] != "admin":
-        updates.pop("budget", None)
-    elif "budget" in updates:
-        updates.pop("budget", None)
-    updates["updated_at"] = now_utc()
-    if "team_member_ids" in updates:
-        await _sync_project_team_members(updates)
-    result = await db.projects.update_one({"id": item_id}, {"$set": updates})
-    if result.matched_count == 0:
+async def update_project(item_id: str, body: GenericDoc, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    existing = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(404, "Not found")
+    await _ensure_project_access(user, existing)
+
+    updates = body.model_dump()
+    for key in ("id", "created_at", "created_by", "created_by_role", "created_by_name", "budget_set", "budget_set_by"):
+        updates.pop(key, None)
+
+    if user["role"] == "employee":
+        updates = {k: v for k, v in updates.items() if k in EMPLOYEE_PROJECT_FIELDS}
+        if "parts" in updates and updates["parts"] is not None:
+            normalized = []
+            for part in updates["parts"]:
+                if not isinstance(part, dict):
+                    continue
+                title = (part.get("title") or "").strip()
+                if not title:
+                    continue
+                normalized.append({
+                    "id": part.get("id") or new_id(),
+                    "title": title,
+                    "created_at": part.get("created_at") or now_utc(),
+                })
+            updates["parts"] = normalized
+    elif user["role"] != "admin":
+        updates.pop("budget", None)
+        if "team_member_ids" in updates:
+            await _sync_project_team_members(updates)
+    else:
+        if "budget" in updates:
+            updates.pop("budget", None)
+        if "team_member_ids" in updates:
+            await _sync_project_team_members(updates)
+
+    if not updates:
+        return _sanitize_project_for_role(existing, user)
+
+    updates["updated_at"] = now_utc()
+    await db.projects.update_one({"id": item_id}, {"$set": updates})
     doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
     return _sanitize_project_for_role(doc, user)
 
@@ -870,10 +896,14 @@ async def project_finance(item_id: str, user: dict = Depends(require_roles("admi
     }
 
 @api.delete("/projects/{item_id}", name="delete_projects")
-async def delete_project(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
-    result = await db.projects.delete_one({"id": item_id})
-    if result.deleted_count == 0:
+async def delete_project(item_id: str, user: dict = Depends(require_roles("admin", "manager", "employee"))):
+    doc = await db.projects.find_one({"id": item_id}, {"_id": 0})
+    if not doc:
         raise HTTPException(404, "Not found")
+    await _ensure_project_access(user, doc)
+    if user["role"] == "employee" and doc.get("created_by") != user["id"]:
+        raise HTTPException(403, "Only the project creator can delete this project")
+    await db.projects.delete_one({"id": item_id})
     return {"ok": True}
 
 make_crud("tasks", "tasks",

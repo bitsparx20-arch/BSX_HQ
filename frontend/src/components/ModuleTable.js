@@ -12,7 +12,7 @@ import PasswordInput from "@/components/PasswordInput";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
-export default function ModuleTable({ endpoint, columns, fields, title, testId, canWrite, canCreate, onRowClick, transformPayload, prepareFormForEdit, formExtra }) {
+export default function ModuleTable({ endpoint, columns, fields, title, testId, canWrite, canCreate, canDeleteRow, onRowClick, transformPayload, prepareFormForEdit, formExtra }) {
   const { user } = useAuth();
   const writable = canWrite ?? (user?.role === "admin" || user?.role === "manager");
   const creatable = canCreate ?? writable;
@@ -250,9 +250,11 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
                       <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(r); }} data-testid={`${testId}-edit-${r.id}`}>
                         <PencilSimple size={14} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); remove(r); }} data-testid={`${testId}-delete-${r.id}`}>
-                        <Trash size={14} className="text-rose-500" />
-                      </Button>
+                      {(!canDeleteRow || canDeleteRow(r)) && (
+                        <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); remove(r); }} data-testid={`${testId}-delete-${r.id}`}>
+                          <Trash size={14} className="text-rose-500" />
+                        </Button>
+                      )}
                     </div>
                   </td>
                 )}

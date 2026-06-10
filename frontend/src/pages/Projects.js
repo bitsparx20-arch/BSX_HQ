@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Plus, Kanban, ListBullets } from "@phosphor-icons/react";
+import { Plus, Kanban, ListBullets, Trash } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 const PROJECT_STAGES = [
@@ -73,10 +73,17 @@ function QuickAdd({ endpoint, label, fields, onAdded, defaults = {} }) {
   );
 }
 
-function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSaved }) {
+function ProjectDetailDialog({
+  project, open, onOpenChange, isAdmin, isEmployee, user, canEdit, onBudgetSaved, onUpdated, onDeleted,
+}) {
   const [finance, setFinance] = useState(null);
   const [budgetInput, setBudgetInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("planning");
+  const [progress, setProgress] = useState(0);
+  const [parts, setParts] = useState([]);
+  const [newPart, setNewPart] = useState("");
+  const [savingProject, setSavingProject] = useState(false);
 
   const loadFinance = async () => {
     if (!project?.id) return;
@@ -87,9 +94,13 @@ function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSav
 
   useEffect(() => {
     if (!open || !project?.id) return;
+    setStatus(project.status || "planning");
+    setProgress(project.progress || 0);
+    setParts(Array.isArray(project.parts) ? project.parts : []);
+    setNewPart("");
     loadFinance().catch(() => toast.error("Failed to load project finance"));
     /* eslint-disable-next-line */
-  }, [open, project?.id]);
+  }, [open, project?.id, project?.status, project?.progress, project?.parts]);
 
   const saveBudget = async () => {
     const amount = Number(budgetInput);
@@ -110,10 +121,53 @@ function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSav
     }
   };
 
+  const saveProjectDetails = async () => {
+    if (!project?.id) return;
+    setSavingProject(true);
+    try {
+      await api.put(`/projects/${project.id}`, {
+        ...project,
+        status,
+        progress: Number(progress) || 0,
+        parts,
+      });
+      toast.success("Project updated");
+      onUpdated?.();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to update project");
+    } finally {
+      setSavingProject(false);
+    }
+  };
+
+  const addPart = () => {
+    const title = newPart.trim();
+    if (!title) return;
+    setParts((prev) => [...prev, { id: crypto.randomUUID(), title, created_at: new Date().toISOString() }]);
+    setNewPart("");
+  };
+
+  const removePart = (partId) => {
+    setParts((prev) => prev.filter((p) => p.id !== partId));
+  };
+
+  const deleteProject = async () => {
+    if (!project?.id || !window.confirm(`Delete project "${project.name}"?`)) return;
+    try {
+      await api.delete(`/projects/${project.id}`);
+      toast.success("Project deleted");
+      onOpenChange(false);
+      onDeleted?.();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to delete project");
+    }
+  };
+
   if (!project) return null;
 
   const needsBudget = finance && !finance.budget_set;
   const managerCreated = finance?.created_by_role === "manager";
+  const canDelete = !isEmployee || project.created_by === user?.id;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -142,11 +196,71 @@ function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSav
                 <div className="bx-mono text-[var(--bx-text)]">{formatDate(project.deadline)}</div>
               </div>
             )}
-            <div>
-              <div className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">Progress</div>
-              <div className="bx-mono text-[var(--bx-text)]">{project.progress || 0}%</div>
-            </div>
+            {canEdit ? (
+              <>
+                <div>
+                  <Label className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">Status</Label>
+                  <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="h-9 mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PROJECT_STAGES.map((s) => (
+                        <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">Progress %</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={progress}
+                    onChange={(e) => setProgress(e.target.value)}
+                    className="mt-1 h-9"
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <div className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">Progress</div>
+                <div className="bx-mono text-[var(--bx-text)]">{project.progress || 0}%</div>
+              </div>
+            )}
           </div>
+
+          {canEdit && (
+            <div className="rounded-lg border border-[var(--bx-border)] p-4 space-y-3">
+              <div className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono">Project parts</div>
+              {parts.length === 0 && (
+                <p className="text-xs text-[var(--bx-text-3)]">No parts yet — add deliverables or phases below.</p>
+              )}
+              <ul className="space-y-2">
+                {parts.map((part) => (
+                  <li key={part.id} className="flex items-center justify-between gap-2 text-sm rounded-md bg-[var(--bx-bg-3)] px-3 py-2">
+                    <span className="truncate">{part.title}</span>
+                    <button
+                      type="button"
+                      onClick={() => removePart(part.id)}
+                      className="text-rose-500 hover:text-rose-600 shrink-0"
+                      aria-label="Remove part"
+                    >
+                      <Trash size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                <Input
+                  value={newPart}
+                  onChange={(e) => setNewPart(e.target.value)}
+                  placeholder="e.g. Homepage, API integration…"
+                  onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addPart())}
+                />
+                <Button type="button" variant="outline" onClick={addPart}>Add</Button>
+              </div>
+            </div>
+          )}
 
           {isAdmin && needsBudget && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4" data-testid="budget-not-added">
@@ -221,6 +335,19 @@ function ProjectDetailDialog({ project, open, onOpenChange, isAdmin, onBudgetSav
               Expenses logged so far: <span className="bx-mono font-medium">{formatCurrency(finance.spent)}</span>
             </div>
           )}
+
+          {canEdit && (
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--bx-border)]">
+              {canDelete ? (
+                <Button type="button" variant="outline" className="text-red-600 border-red-200" onClick={deleteProject}>
+                  Delete project
+                </Button>
+              ) : <span />}
+              <Button onClick={saveProjectDetails} disabled={savingProject} className="bg-[var(--bx-brand)] hover:opacity-90 text-white">
+                {savingProject ? "Saving…" : "Save changes"}
+              </Button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -232,7 +359,8 @@ export default function Projects() {
   const isAdmin = user?.role === "admin";
   const isEmployee = user?.role === "employee";
   const canWrite = isAdmin || user?.role === "manager";
-  const canCreate = canWrite || isEmployee;
+  const canEditProjects = canWrite || isEmployee;
+  const canCreate = canEditProjects;
   const [stats, setStats] = useState({});
   const [teamUsers, setTeamUsers] = useState([]);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -349,7 +477,7 @@ export default function Projects() {
         eyebrow="Module · 03"
         title="Projects"
         description={isEmployee
-          ? "Your assigned projects — add your own and click a card to view details."
+          ? "Your assigned projects — drag cards to update status, click to edit parts and details."
           : "Plan and track projects."}
       />
 
@@ -376,7 +504,7 @@ export default function Projects() {
             endpoint="/projects"
             stages={PROJECT_STAGES}
             render={renderProjectCard}
-            readOnly={!canWrite}
+            readOnly={!canEditProjects}
             onItemClick={openProject}
           />
         </TabsContent>
@@ -389,8 +517,9 @@ export default function Projects() {
             columns={projectColumnsForUser}
             fields={projectFieldsForUser}
             testId="projects"
-            canWrite={canWrite}
+            canWrite={canEditProjects}
             canCreate={canCreate}
+            canDeleteRow={(row) => !isEmployee || row.created_by === user?.id}
             onRowClick={openProject}
             formExtra={isEmployee ? undefined : projectFormExtra}
             prepareFormForEdit={prepareProjectForm}
@@ -403,7 +532,12 @@ export default function Projects() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         isAdmin={isAdmin}
+        isEmployee={isEmployee}
+        user={user}
+        canEdit={canEditProjects}
         onBudgetSaved={refresh}
+        onUpdated={refresh}
+        onDeleted={refresh}
       />
     </div>
   );
