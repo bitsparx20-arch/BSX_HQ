@@ -140,6 +140,7 @@ class WhatsAppService:
         self.phone_number_id = os.environ.get("PINBOT_PHONE_NUMBER_ID", "").strip()
         self.default_template = os.environ.get("PINBOT_TEMPLATE_NAME", "lms_notification").strip()
         self.attendance_template = os.environ.get("PINBOT_ATTENDANCE_TEMPLATE", "bitsparx_attendence").strip()
+        self.meeting_template = os.environ.get("PINBOT_MEETING_TEMPLATE", "bitsparx_meeting").strip()
         self.pinbot_enabled = bool(self.pinbot_api_key and self.phone_number_id)
         self.springedge_api_key = os.environ.get("SPRINGEDGE_API_KEY", "").strip()
         self.sender = os.environ.get("SPRINGEDGE_SENDER", "BITSPARX")
@@ -331,8 +332,8 @@ async def logout(response: Response):
 # Generic CRUD factory
 # ──────────────────────────────────────────────────────────────────────────────
 def make_crud(path: str, collection: str, notify_event: Optional[str] = None,
-              notify_template=None, list_roles=None, write_roles=None, create_roles=None,
-              on_create=None):
+              notify_template=None, notify_async=None, list_roles=None, write_roles=None,
+              create_roles=None, on_create=None):
     """
     Registers POST /{path}, GET /{path}, GET /{path}/{id}, PUT /{path}/{id}, DELETE /{path}/{id}
     """
@@ -356,14 +357,23 @@ def make_crud(path: str, collection: str, notify_event: Optional[str] = None,
         if on_create:
             on_create(doc, user)
         await db[collection].insert_one(doc.copy())
-        if notify_event and notify_template:
+        whatsapp: List[dict] = []
+        if notify_async:
+            try:
+                whatsapp = await notify_async(doc) or []
+            except Exception:
+                log.exception("notify failed")
+        elif notify_event and notify_template:
             try:
                 msg = notify_template(doc)
                 phone = doc.get("phone") or doc.get("contact_phone") or os.environ.get("ADMIN_PHONE", "919999999999")
                 await wa.send(phone, msg, event=notify_event, meta={"id": doc["id"], "collection": collection})
             except Exception:
                 log.exception("notify failed")
-        return strip_id(doc)
+        result = strip_id(doc)
+        if whatsapp:
+            result["whatsapp"] = whatsapp
+        return result
 
     @api.get(f"/{path}/{{item_id}}", name=f"get_{collection}")
     async def get_item(item_id: str, user: dict = Depends(require_roles(*list_roles))):
@@ -455,6 +465,95 @@ async def collect_attendance_notify_phones(user: dict) -> List[str]:
     if not phones:
         add(os.environ.get("ADMIN_PHONE", "919999999999"))
     return phones
+
+def _norm_attendee_key(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+def format_meeting_time(start_at: Optional[str]) -> str:
+    if not start_at:
+        return "TBD"
+    dt = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    return local.strftime("%I:%M %p on %d %b %Y").lstrip("0")
+
+def resolve_meeting_link(meeting: dict) -> str:
+    link = (meeting.get("meeting_link") or "").strip()
+    if link:
+        return link if link.startswith(("http://", "https://")) else f"https://{link}"
+    location = (meeting.get("location") or "").strip()
+    if location.startswith(("http://", "https://")):
+        return location
+    if re.match(r"^(zoom\.us|meet\.google|teams\.microsoft)", location, re.I):
+        return f"https://{location}"
+    if location:
+        return f"{meeting.get('title', 'Meeting')} — {location}"
+    return "Contact organizer for meeting details"
+
+async def resolve_meeting_attendee_phones(attendees: Any) -> List[str]:
+    if isinstance(attendees, str):
+        attendees = [attendees]
+    attendees = list(attendees or [])
+    phones: List[str] = []
+    seen: set[str] = set()
+
+    def add_phone(raw: Optional[str]) -> None:
+        phone = normalize_phone_optional(raw)
+        if phone and phone not in seen:
+            seen.add(phone)
+            phones.append(phone)
+
+    all_team = any(_norm_attendee_key(a) == "all team" for a in attendees)
+    employees = await db.employees.find({}, {"_id": 0, "name": 1, "email": 1, "phone": 1}).to_list(1000)
+    users_list = await db.users.find({}, {"_id": 0, "name": 1, "email": 1, "phone": 1}).to_list(1000)
+
+    if all_team or not attendees:
+        for emp in employees:
+            add_phone(emp.get("phone"))
+        if not phones:
+            for u in users_list:
+                add_phone(u.get("phone"))
+        return phones
+
+    for attendee in attendees:
+        key = _norm_attendee_key(str(attendee))
+        if not key or key == "all team":
+            continue
+        matched = False
+        for emp in employees:
+            if key in (_norm_attendee_key(emp.get("name")), _norm_attendee_key(emp.get("email"))):
+                add_phone(emp.get("phone"))
+                matched = True
+                break
+        if matched:
+            continue
+        for u in users_list:
+            if key in (_norm_attendee_key(u.get("name")), _norm_attendee_key(u.get("email"))):
+                add_phone(u.get("phone"))
+                break
+    return phones
+
+async def notify_meeting_scheduled(meeting: dict) -> List[dict]:
+    """Send bitsparx_meeting template: {{1}} time, {{2}} meeting link."""
+    time_str = format_meeting_time(meeting.get("start_at"))
+    link_str = resolve_meeting_link(meeting)
+    meta = {"meeting_id": meeting.get("id"), "title": meeting.get("title")}
+    results: List[dict] = []
+    for phone in await resolve_meeting_attendee_phones(meeting.get("attendees")):
+        record = await wa.send_template(
+            phone,
+            params=[time_str, link_str],
+            event="meeting_scheduled",
+            template_name=wa.meeting_template,
+            meta=meta,
+        )
+        results.append({
+            "to": phone,
+            "status": record.get("status"),
+            "template": record.get("template_name"),
+        })
+    return results
 
 async def notify_attendance_checkin(user: dict, check_in_iso: str) -> List[dict]:
     """Send bitsparx_attendence template: {{1}} name, {{2}} time."""
@@ -946,8 +1045,7 @@ async def delete_invoice(item_id: str, user: dict = Depends(require_roles("admin
     return {"ok": True}
 
 make_crud("meetings", "meetings",
-          notify_event="meeting_scheduled",
-          notify_template=lambda d: f"Meeting '{d.get('title','-')}' scheduled on {d.get('start_at','TBD')}.",
+          notify_async=notify_meeting_scheduled,
           write_roles=("admin", "manager", "employee"))
 
 make_crud("visits", "visits",

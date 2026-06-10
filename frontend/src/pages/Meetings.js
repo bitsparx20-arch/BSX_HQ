@@ -132,9 +132,21 @@ export default function Meetings() {
         ...rest,
         attendees: attendeeNames(attendee_ids, companyPeople),
       };
-      if (selected) await api.put(`/meetings/${selected.id}`, payload);
-      else await api.post("/meetings", payload);
-      toast.success(selected ? "Meeting updated" : "Meeting scheduled");
+      if (selected) {
+        await api.put(`/meetings/${selected.id}`, payload);
+        toast.success("Meeting updated");
+      } else {
+        const { data } = await api.post("/meetings", payload);
+        const wa = data?.whatsapp || [];
+        const sent = wa.some((w) => w.status === "sent");
+        toast.success(
+          sent
+            ? `Meeting scheduled · WhatsApp sent to ${wa.length} recipient${wa.length === 1 ? "" : "s"}`
+            : wa.length
+              ? "Meeting scheduled · WhatsApp queued (see Notification log)"
+              : "Meeting scheduled · no attendee phones found",
+        );
+      }
       setOpen(false); setSelected(null); setForm(blank);
       load();
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
