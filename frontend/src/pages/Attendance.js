@@ -34,8 +34,9 @@ export default function Attendance() {
 
   const checkIn = async () => {
     try {
-      await api.post("/attendance/check-in", { note: "Web check-in", location: "Office" });
-      toast.success("Checked in");
+      const { data } = await api.post("/attendance/check-in", { note: "Web check-in", location: "Office" });
+      const sent = (data?.whatsapp || []).some((w) => w.status === "sent");
+      toast.success(sent ? "Checked in · WhatsApp sent" : "Checked in");
       await refreshAttendanceGate();
       load();
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }

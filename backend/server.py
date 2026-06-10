@@ -1,7 +1,7 @@
 """
 Bitsparx HQ — Company Management System
 FastAPI backend with JWT auth, role-based access, 12 module CRUDs,
-and SpringEdge WhatsApp notification service.
+PinBot WhatsApp templates and SpringEdge text fallback.
 """
 from dotenv import load_dotenv
 from pathlib import Path
@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+import json
 import os
 import re
 import uuid
@@ -129,19 +130,94 @@ def require_roles(*roles: str):
     return checker
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SpringEdge WhatsApp service
+# WhatsApp (PinBot templates + SpringEdge text fallback)
 # ──────────────────────────────────────────────────────────────────────────────
 class WhatsAppService:
-    """SpringEdge WhatsApp gateway. Falls back to log-only when keys missing."""
+    """PinBot template API (primary) with SpringEdge text fallback."""
 
     def __init__(self):
-        self.api_key = os.environ.get("SPRINGEDGE_API_KEY", "").strip()
+        self.pinbot_api_key = os.environ.get("PINBOT_API_KEY", "").strip()
+        self.phone_number_id = os.environ.get("PINBOT_PHONE_NUMBER_ID", "").strip()
+        self.default_template = os.environ.get("PINBOT_TEMPLATE_NAME", "lms_notification").strip()
+        self.attendance_template = os.environ.get("PINBOT_ATTENDANCE_TEMPLATE", "bitsparx_attendence").strip()
+        self.pinbot_enabled = bool(self.pinbot_api_key and self.phone_number_id)
+        self.springedge_api_key = os.environ.get("SPRINGEDGE_API_KEY", "").strip()
         self.sender = os.environ.get("SPRINGEDGE_SENDER", "BITSPARX")
-        self.url = os.environ.get("SPRINGEDGE_WHATSAPP_URL", "https://api.springedge.com/whatsapp/v1/send")
-        self.enabled = (
-            os.environ.get("SPRINGEDGE_ENABLED", "false").lower() == "true"
-            and bool(self.api_key)
+        self.springedge_url = os.environ.get(
+            "SPRINGEDGE_WHATSAPP_URL", "https://api.springedge.com/whatsapp/v1/send"
         )
+        self.springedge_enabled = (
+            os.environ.get("SPRINGEDGE_ENABLED", "false").lower() == "true"
+            and bool(self.springedge_api_key)
+        )
+
+    async def _persist(self, record: dict) -> dict:
+        await db.notifications.insert_one(record.copy())
+        return record
+
+    async def send_template(
+        self,
+        to: str,
+        params: List[str],
+        event: str = "generic",
+        template_name: Optional[str] = None,
+        meta: Optional[dict] = None,
+    ) -> dict:
+        template_name = template_name or self.default_template
+        record = {
+            "id": new_id(),
+            "to": to,
+            "message": " | ".join(params),
+            "template_name": template_name,
+            "template_params": params,
+            "event": event,
+            "meta": meta or {},
+            "status": "queued",
+            "provider": "pinbot",
+            "created_at": now_utc(),
+        }
+        if not self.pinbot_enabled:
+            record["status"] = "logged_only"
+            record["info"] = "PinBot not configured. Set PINBOT_API_KEY & PINBOT_PHONE_NUMBER_ID."
+            log.info(f"[WA·LOG] to={to} event={event} template={template_name} params={params}")
+            return await self._persist(record)
+        url = f"https://partnersv1.pinbot.ai/v3/{self.phone_number_id}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to,
+            "type": "template",
+            "template": {
+                "language": {"code": "en"},
+                "name": template_name,
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": p[:1024]} for p in params],
+                    }
+                ],
+            },
+        }
+        if meta:
+            payload["biz_opaque_callback_data"] = json.dumps(meta)[:512]
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as cx:
+                resp = await cx.post(
+                    url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "apikey": self.pinbot_api_key,
+                    },
+                )
+                record["status"] = "sent" if resp.status_code < 300 else "failed"
+                record["http_status"] = resp.status_code
+                record["response"] = resp.text[:500]
+        except Exception as e:
+            record["status"] = "failed"
+            record["error"] = str(e)
+            log.exception("PinBot template send failed")
+        return await self._persist(record)
 
     async def send(self, to: str, message: str, event: str = "generic", meta: Optional[dict] = None) -> dict:
         record = {
@@ -155,18 +231,17 @@ class WhatsAppService:
             "provider": "springedge",
             "created_at": now_utc(),
         }
-        if not self.enabled:
+        if not self.springedge_enabled:
             record["status"] = "logged_only"
-            record["info"] = "SpringEdge not configured. Set SPRINGEDGE_API_KEY & SPRINGEDGE_ENABLED=true."
+            record["info"] = "WhatsApp not configured. Set PINBOT_API_KEY or SPRINGEDGE_API_KEY."
             log.info(f"[WA·LOG] to={to} event={event} msg={message[:80]}")
-            await db.notifications.insert_one(record.copy())
-            return record
+            return await self._persist(record)
         try:
             async with httpx.AsyncClient(timeout=15.0) as cx:
                 resp = await cx.post(
-                    self.url,
+                    self.springedge_url,
                     data={
-                        "apikey": self.api_key,
+                        "apikey": self.springedge_api_key,
                         "sender": self.sender,
                         "to": to,
                         "message": message,
@@ -179,8 +254,7 @@ class WhatsAppService:
             record["status"] = "failed"
             record["error"] = str(e)
             log.exception("SpringEdge send failed")
-        await db.notifications.insert_one(record.copy())
-        return record
+        return await self._persist(record)
 
 wa = WhatsAppService()
 
@@ -328,6 +402,80 @@ def normalize_phone(raw: Optional[str]) -> str:
     if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
         return digits
     raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile (e.g. 9876543210 or +91 9876543210)")
+
+def normalize_phone_optional(raw: Optional[str]) -> Optional[str]:
+    try:
+        return normalize_phone(raw)
+    except HTTPException:
+        return None
+
+def format_checkin_time(iso_ts: str) -> str:
+    dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    return local.strftime("%I:%M %p on %d %b %Y").lstrip("0")
+
+async def resolve_user_phone(user: dict) -> str:
+    email = (user.get("email") or "").strip().lower()
+    if email:
+        emp = await db.employees.find_one({"email": email}, {"_id": 0, "phone": 1})
+        if emp:
+            phone = normalize_phone_optional(emp.get("phone"))
+            if phone:
+                return phone
+    phone = normalize_phone_optional(user.get("phone"))
+    if phone:
+        return phone
+    return os.environ.get("ADMIN_PHONE", "919999999999")
+
+async def collect_attendance_notify_phones(user: dict) -> List[str]:
+    """Employee phone plus admin phones (deduped) for check-in WhatsApp alerts."""
+    phones: List[str] = []
+    seen: set[str] = set()
+
+    def add(raw: Optional[str]) -> None:
+        p = normalize_phone_optional(raw)
+        if p and p not in seen:
+            seen.add(p)
+            phones.append(p)
+
+    email = (user.get("email") or "").strip().lower()
+    if email:
+        emp = await db.employees.find_one({"email": email}, {"_id": 0, "phone": 1})
+        if emp:
+            add(emp.get("phone"))
+    add(user.get("phone"))
+
+    if os.environ.get("PINBOT_ATTENDANCE_NOTIFY_ADMINS", "true").lower() == "true":
+        add(os.environ.get("ADMIN_PHONE"))
+        async for admin in db.users.find({"role": "admin"}, {"_id": 0, "phone": 1}):
+            add(admin.get("phone"))
+
+    if not phones:
+        add(os.environ.get("ADMIN_PHONE", "919999999999"))
+    return phones
+
+async def notify_attendance_checkin(user: dict, check_in_iso: str) -> List[dict]:
+    """Send bitsparx_attendence template: {{1}} name, {{2}} time."""
+    name = (user.get("name") or user.get("email") or "Team member").strip()
+    time_str = format_checkin_time(check_in_iso)
+    meta = {"user_id": user["id"], "user_name": name}
+    results: List[dict] = []
+    for phone in await collect_attendance_notify_phones(user):
+        record = await wa.send_template(
+            phone,
+            params=[name, time_str],
+            event="attendance_checkin",
+            template_name=wa.attendance_template,
+            meta=meta,
+        )
+        results.append({
+            "to": phone,
+            "status": record.get("status"),
+            "template": record.get("template_name"),
+        })
+    return results
 
 def normalize_email(raw: Optional[str]) -> str:
     email = (raw or "").strip().lower()
@@ -946,8 +1094,14 @@ async def check_in(body: AttendanceCheckIn, user: dict = Depends(get_current_use
     doc["check_in_note"] = body.note
     doc["check_in_location"] = body.location
     await db.attendance.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
-    await wa.send(user.get("phone") or "919999999999", f"Checked in at {doc['check_in']}", event="attendance_checkin", meta={"user_id": user["id"]})
-    return strip_id(doc)
+    whatsapp: List[dict] = []
+    try:
+        whatsapp = await notify_attendance_checkin(user, doc["check_in"])
+    except Exception:
+        log.exception("Attendance check-in WhatsApp notification failed")
+    result = strip_id(doc)
+    result["whatsapp"] = whatsapp
+    return result
 
 @api.post("/attendance/check-out")
 async def check_out(body: AttendanceCheckIn, user: dict = Depends(get_current_user)):
