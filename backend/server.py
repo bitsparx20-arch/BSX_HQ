@@ -1508,7 +1508,12 @@ async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
 # Notifications
 @api.get("/notifications")
 async def list_notifications(user: dict = Depends(get_current_user)):
-    return await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
+    return await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).limit(500).to_list(500)
+
+@api.delete("/notifications")
+async def clear_notifications(user: dict = Depends(require_roles("admin"))):
+    result = await db.notifications.delete_many({})
+    return {"ok": True, "deleted": result.deleted_count}
 
 class TestNotify(BaseModel):
     to: str

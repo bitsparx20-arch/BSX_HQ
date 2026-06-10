@@ -1,26 +1,63 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader, Section, StatusBadge } from "@/components/Shared";
-import { WhatsappLogo } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
+import { Trash, WhatsappLogo } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 export default function Notifications() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [items, setItems] = useState([]);
+  const [clearing, setClearing] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const { data } = await api.get("/notifications");
     setItems(data);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const clearAll = async () => {
+    if (!window.confirm("Clear all WhatsApp notification logs? This cannot be undone.")) return;
+    setClearing(true);
+    try {
+      const { data } = await api.delete("/notifications");
+      toast.success(`Cleared ${data.deleted} log${data.deleted === 1 ? "" : "s"}`);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to clear logs");
+    } finally {
+      setClearing(false);
+    }
   };
-  useEffect(() => { load(); }, []);
 
   const grouped = items.reduce((acc, n) => {
-    (acc[n.event || "generic"] = acc[n.event || "generic"] || 0) ;
+    (acc[n.event || "generic"] = acc[n.event || "generic"] || 0);
     acc[n.event || "generic"] += 1;
     return acc;
   }, {});
 
   return (
     <div>
-      <PageHeader title="Notification" />
+      <PageHeader
+        title="Notification"
+        actions={
+          isAdmin ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={clearAll}
+              disabled={clearing || items.length === 0}
+              className="text-red-600 border-red-200 hover:bg-red-50"
+            >
+              <Trash size={14} className="mr-1.5" />
+              {clearing ? "Clearing…" : "Clear all logs"}
+            </Button>
+          ) : null
+        }
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
         <div className="bx-kpi"><div className="bx-mono text-[10px] uppercase tracking-widest text-slate-500 mb-2">Total Sent</div><div className="bx-heading text-3xl">{items.length}</div></div>

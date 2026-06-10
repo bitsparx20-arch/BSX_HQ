@@ -1,6 +1,7 @@
 import React from "react";
 import ModuleTable from "@/components/ModuleTable";
 import { PageHeader, formatCurrency } from "@/components/Shared";
+import { Label } from "@/components/ui/label";
 
 const assetTotal = (form) => (Number(form.qty) || 0) * (Number(form.unit_cost) || 0);
 
@@ -28,10 +29,15 @@ export default function Assets() {
         testId="assets"
         prepareFormForEdit={prepareFormForEdit}
         transformPayload={transformPayload}
-        formExtra={(form) => (
-          <div className="rounded-lg border border-[var(--bx-border)] bg-[var(--bx-bg-3)] px-3 py-2.5 flex items-center justify-between">
-            <span className="text-xs text-[var(--bx-text-3)]">Total value (Qty × Cost per unit)</span>
-            <span className="text-sm font-semibold bx-mono text-[var(--bx-text)]">{formatCurrency(assetTotal(form))}</span>
+        formExtra={({ form }) => (
+          <div className="space-y-2 w-full min-w-0">
+            <Label className="text-xs">Total value</Label>
+            <div className="flex h-10 w-full min-w-0 items-center justify-between gap-3 rounded-md border border-input bg-[var(--bx-bg-3)] px-3">
+              <span className="text-xs text-[var(--bx-text-3)] truncate">Qty × Cost per unit</span>
+              <span className="text-sm font-semibold bx-mono text-[var(--bx-text)] shrink-0">
+                {formatCurrency(assetTotal(form))}
+              </span>
+            </div>
           </div>
         )}
         columns={[

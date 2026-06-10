@@ -14,7 +14,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Plus, VideoCamera, MapPin, Clock } from "@phosphor-icons/react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { getMeetingLink, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
+import { getMeetingLink, isMeetingLive, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
 
 const locales = { "en-US": enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
@@ -48,6 +48,12 @@ export default function Meetings() {
   const [selected, setSelected] = useState(null);
   const [date, setDate] = useState(() => new Date());
   const [view, setView] = useState("week");
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const scrollToTime = useMemo(() => {
     const now = new Date();
@@ -205,32 +211,64 @@ export default function Meetings() {
         <Section title="Upcoming">
           <div className="divide-y divide-slate-100">
             {upcoming.length === 0 && <div className="px-5 py-8 text-center text-sm text-slate-500">No upcoming meetings</div>}
-            {upcoming.map((m) => (
-              <button key={m.id} onClick={() => openEvent({ resource: m })} className="w-full text-left px-5 py-3 hover:bg-slate-50 transition">
-                <div className="font-semibold text-sm text-slate-900 line-clamp-1">{m.title}</div>
-                <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                  <Clock size={11} />
-                  <span className="bx-mono">{new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+            {upcoming.map((m) => {
+              const link = getMeetingLink(m);
+              const live = isMeetingLive(m, now);
+              return (
+                <div key={`${m.id}-${m._occurrenceIndex ?? 0}`} className="px-5 py-3 hover:bg-slate-50 transition">
+                  <button type="button" onClick={() => openEvent({ resource: m })} className="w-full text-left">
+                    <div className="font-semibold text-sm text-slate-900 line-clamp-1">{m.title}</div>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                      <Clock size={11} />
+                      <span className="bx-mono">{new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                    </div>
+                  </button>
+                  {link ? (
+                    <div className="flex items-center gap-2 mt-2">
+                      <Button
+                        asChild={live}
+                        size="sm"
+                        disabled={!live}
+                        className={`h-9 px-4 text-xs font-semibold shrink-0 ${
+                          live
+                            ? "bg-[var(--bx-brand)] hover:opacity-90 text-white"
+                            : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                        }`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {live ? (
+                          <a href={link} target="_blank" rel="noopener noreferrer">
+                            <VideoCamera size={14} weight="fill" className="mr-1.5" />
+                            Join meeting
+                          </a>
+                        ) : (
+                          <span>
+                            <VideoCamera size={14} className="mr-1.5" />
+                            Join meeting
+                          </span>
+                        )}
+                      </Button>
+                      <a
+                        href={link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className={`flex items-center gap-1 text-xs truncate hover:underline ${
+                          live ? "text-[var(--bx-brand)]" : "text-slate-400 pointer-events-none"
+                        }`}
+                      >
+                        <span className="truncate">{link.replace(/^https?:\/\//, "")}</span>
+                      </a>
+                    </div>
+                  ) : m.location ? (
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-2">
+                      <MapPin size={11} />
+                      <span className="truncate">{m.location}</span>
+                    </div>
+                  ) : null}
                 </div>
-                {getMeetingLink(m) ? (
-                  <a
-                    href={getMeetingLink(m)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex items-center gap-1.5 text-xs text-[var(--bx-brand)] mt-0.5 hover:underline"
-                  >
-                    <VideoCamera size={11} />
-                    <span className="truncate">Join meeting</span>
-                  </a>
-                ) : m.location ? (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
-                    <MapPin size={11} />
-                    <span className="truncate">{m.location}</span>
-                  </div>
-                ) : null}
-              </button>
-            ))}
+              );
+            })}
           </div>
         </Section>
       </div>

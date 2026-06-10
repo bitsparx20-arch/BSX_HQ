@@ -15,10 +15,24 @@ export const getMeetingLink = (meeting) => {
   return null;
 };
 
+export const meetingEndTime = (meeting) => {
+  if (!meeting?.start_at) return null;
+  const start = new Date(meeting.start_at);
+  if (meeting.end_at) return new Date(meeting.end_at);
+  return new Date(start.getTime() + 60 * 60 * 1000);
+};
+
 export const isUpcomingMeeting = (meeting) => {
+  const end = meetingEndTime(meeting);
+  return end ? end > new Date() : false;
+};
+
+export const isMeetingLive = (meeting, now = new Date()) => {
   if (!meeting?.start_at) return false;
-  const end = meeting.end_at ? new Date(meeting.end_at) : new Date(meeting.start_at);
-  return end > new Date();
+  const start = new Date(meeting.start_at);
+  const end = meetingEndTime(meeting);
+  if (!end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+  return now >= start && now <= end;
 };
 
 export const sortMeetingsByStart = (list) =>

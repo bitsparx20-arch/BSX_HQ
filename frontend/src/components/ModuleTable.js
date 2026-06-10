@@ -68,7 +68,7 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
 
   const save = async () => {
     try {
-      const payload = { ...form };
+      let payload = { ...form };
       for (const f of fields) {
         if (!isFieldVisible(f, payload)) continue;
         const value = payload[f.key];
@@ -201,7 +201,9 @@ export default function ModuleTable({ endpoint, columns, fields, title, testId, 
                     </div>
                   ))}
                   {formExtra && (
-                    <div className="sm:col-span-2">{formExtra({ form, setForm, editing: !!editing })}</div>
+                    <div className="col-span-1 sm:col-span-2 w-full min-w-0">
+                      {formExtra({ form, setForm, editing: !!editing })}
+                    </div>
                   )}
                 </div>
                 <DialogFooter className="pt-4 mt-auto">
