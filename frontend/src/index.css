@@ -312,11 +312,23 @@ body {
 [data-debug-wrapper="true"] { display: contents !important; }
 
 /* Rich text note editor (TipTap) */
+.bx-rich-editor-shell .bx-rich-editor-scroll {
+  display: flex;
+  flex-direction: column;
+}
+.bx-rich-editor-shell .bx-rich-editor-scroll > div {
+  flex: 1;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
 .bx-rich-editor-shell .ProseMirror {
+  flex: 1;
   min-height: 20rem;
   color: var(--bx-text);
   line-height: 1.65;
   outline: none;
+  cursor: text;
 }
 .bx-rich-editor-shell .ProseMirror p.is-editor-empty:first-child::before {
   color: var(--bx-text-3);
@@ -369,8 +381,23 @@ body {
   max-width: 100%;
   height: auto;
   border-radius: 0.5rem;
+  margin: 0.25rem 0.75rem 0.25rem 0;
+  border: 1px solid var(--bx-border);
+  display: inline-block;
+  vertical-align: top;
+  cursor: default;
+}
+.bx-rich-editor-shell .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--bx-brand);
+  outline-offset: 2px;
+}
+.bx-note-view .bx-note-view-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
   margin: 0.75rem 0;
   border: 1px solid var(--bx-border);
+  display: block;
 }
 .bx-rich-editor-shell .ProseMirror a.bx-editor-link,
 .bx-rich-editor-shell .ProseMirror a {

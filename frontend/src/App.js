@@ -5,8 +5,10 @@ import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { AttendanceProvider } from "@/contexts/AttendanceContext";
 import { SidebarAlertsProvider } from "@/contexts/SidebarAlertsContext";
+import { NotesDraftProvider } from "@/contexts/NotesDraftContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Layout from "@/components/Layout";
+import SessionGuard from "@/components/SessionGuard";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Attendance from "@/pages/Attendance";
@@ -79,11 +81,15 @@ function App() {
                 path="/"
                 element={
                   <ProtectedRoute>
-                    <AttendanceProvider>
-                      <SidebarAlertsProvider>
-                        <Layout />
-                      </SidebarAlertsProvider>
-                    </AttendanceProvider>
+                    <SessionGuard>
+                      <AttendanceProvider>
+                        <SidebarAlertsProvider>
+                          <NotesDraftProvider>
+                            <Layout />
+                          </NotesDraftProvider>
+                        </SidebarAlertsProvider>
+                      </AttendanceProvider>
+                    </SessionGuard>
                   </ProtectedRoute>
                 }
               >

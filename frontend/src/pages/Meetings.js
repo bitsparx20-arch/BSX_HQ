@@ -14,7 +14,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Plus, VideoCamera, MapPin, Clock } from "@phosphor-icons/react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { getMeetingLink, isMeetingLive, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
+import { getMeetingLink, isMeetingLive, formatMeetingDateTimeIST, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
 
 const locales = { "en-US": enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
@@ -220,7 +220,7 @@ export default function Meetings() {
                     <div className="font-semibold text-sm text-slate-900 line-clamp-1">{m.title}</div>
                     <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
                       <Clock size={11} />
-                      <span className="bx-mono">{new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                      <span className="bx-mono">{formatMeetingDateTimeIST(m.start_at)}</span>
                     </div>
                   </button>
                   {link ? (

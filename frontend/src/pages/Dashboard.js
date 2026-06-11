@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getMeetingLink, upcomingMeetings } from "@/lib/meetings";
+import { getMeetingLink, formatMeetingDateTimeIST, upcomingMeetings } from "@/lib/meetings";
 import { api } from "@/lib/api";
 import { PageHeader, KpiCard, Section, StatusBadge, formatCurrency, formatDate } from "@/components/Shared";
 import { useAuth } from "@/contexts/AuthContext";
@@ -30,7 +30,7 @@ function UpcomingMeetingsList({ meetings, limit = 5 }) {
             <div className="text-sm font-semibold text-slate-900 line-clamp-1">{m.title}</div>
             <div className="text-xs text-[var(--bx-text-2)] mt-0.5 bx-mono flex items-center gap-1">
               <Clock size={11} />
-              {m.start_at ? new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—"}
+              {m.start_at ? formatMeetingDateTimeIST(m.start_at) : "—"}
             </div>
             {link ? (
               <a
@@ -322,7 +322,7 @@ function EmployeeDashboard({ user }) {
                   <div className="text-sm font-semibold text-slate-900 line-clamp-1">{m.title}</div>
                   <div className="text-xs text-[var(--bx-text-2)] mt-0.5 bx-mono flex items-center gap-1">
                     <Clock size={11} />
-                    {m.start_at ? new Date(m.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—"}
+                    {m.start_at ? formatMeetingDateTimeIST(m.start_at) : "—"}
                   </div>
                   {link ? (
                     <a

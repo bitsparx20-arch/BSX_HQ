@@ -15,6 +15,27 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const detail = error.response?.data?.detail;
+    const sessionEnded = error.response?.status === 401
+      && typeof detail === "string"
+      && (detail === "SESSION_SUPERSEDED" || detail === "SESSION_INVALID");
+    if (sessionEnded) {
+      localStorage.removeItem("bx_token");
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = `/login?reason=${encodeURIComponent(
+          detail === "SESSION_SUPERSEDED"
+            ? "signed-in-elsewhere"
+            : "session-invalid",
+        )}`;
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 export function formatApiError(detail, error) {
   if (detail == null) {
     if (error?.code === "ERR_NETWORK" || !error?.response) {

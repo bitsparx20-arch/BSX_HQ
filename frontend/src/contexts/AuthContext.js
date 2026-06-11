@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
+import { getDeviceId } from "@/lib/session";
 
 const AuthContext = createContext(null);
 
@@ -22,7 +23,11 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const { data } = await api.post("/auth/login", { email, password });
+      const { data } = await api.post("/auth/login", {
+        email,
+        password,
+        device_id: getDeviceId(),
+      });
       if (data.token) localStorage.setItem("bx_token", data.token);
       setUser(data.user);
       return { ok: true };

@@ -13,6 +13,7 @@ import { Plus, Trash, FloppyDisk, NotePencil, PencilSimple, ShareNetwork, Users 
 import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
 import { useSidebarAlerts } from "@/contexts/SidebarAlertsContext";
+import { useNotesDraft } from "@/contexts/NotesDraftContext";
 
 const stripHtml = (html) => (html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
@@ -22,8 +23,15 @@ const preview = (html, max = 60) => {
   return line.length > max ? `${line.slice(0, max)}…` : line;
 };
 
+const applyDraftOrNote = (note, draft) => ({
+  title: draft?.title ?? note.title ?? "",
+  content: draft?.content ?? note.content ?? "",
+  editing: draft?.editing ?? false,
+});
+
 export default function Notes() {
   const { refresh: refreshAlerts } = useSidebarAlerts();
+  const { setDraft, getDraft, clearDraft, setActiveNoteId, getActiveNoteId } = useNotesDraft();
   const [notes, setNotes] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [title, setTitle] = useState("");
@@ -40,19 +48,6 @@ export default function Notes() {
   const myNotes = notes.filter((n) => n.is_owner !== false);
   const sharedNotes = notes.filter((n) => n.is_owner === false);
 
-  const load = async () => {
-    const { data } = await api.get("/notes");
-    const list = data || [];
-    setNotes(list);
-    if (list.length && !activeId) {
-      const first = list[0];
-      setActiveId(first.id);
-      setTitle(first.title);
-      setContent(first.content || "");
-      setEditing(false);
-    }
-  };
-
   const markNoteSeen = async (note) => {
     if (!note || note.is_owner !== false || !note.is_unread) return;
     try {
@@ -64,20 +59,61 @@ export default function Notes() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await api.get("/notes");
+      if (cancelled) return;
+      const list = data || [];
+      setNotes(list);
+      if (!list.length) {
+        setActiveId(null);
+        setTitle("");
+        setContent("");
+        setEditing(false);
+        return;
+      }
+      const savedActiveId = getActiveNoteId();
+      const note = list.find((n) => n.id === savedActiveId) || list[0];
+      const draft = getDraft(note.id);
+      const next = applyDraftOrNote(note, draft);
+      setActiveId(note.id);
+      setActiveNoteId(note.id);
+      setTitle(next.title);
+      setContent(next.content);
+      setEditing(next.editing && note.is_owner !== false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!activeId || !active) return;
     if (active.is_owner === false && active.is_unread) {
       markNoteSeen(active);
     }
-  }, [activeId]);
+  }, [activeId, active]);
+
+  useEffect(() => {
+    if (!activeId || !isOwner) return;
+    setDraft(activeId, { title, content, editing });
+  }, [activeId, title, content, editing, isOwner, setDraft]);
+
+  useEffect(() => {
+    if (activeId) setActiveNoteId(activeId);
+  }, [activeId, setActiveNoteId]);
 
   const selectNote = (note, startEditing = false) => {
+    if (activeId && isOwner && editing) {
+      setDraft(activeId, { title, content, editing: true });
+    }
+    const draft = getDraft(note.id);
+    const next = applyDraftOrNote(note, draft);
     setActiveId(note.id);
-    setTitle(note.title || "");
-    setContent(note.content || "");
-    setEditing(startEditing && note.is_owner !== false);
+    setActiveNoteId(note.id);
+    setTitle(next.title);
+    setContent(next.content);
+    setEditing(startEditing && note.is_owner !== false ? true : next.editing && note.is_owner !== false);
   };
 
   const createNote = async () => {
@@ -85,9 +121,11 @@ export default function Notes() {
       const { data } = await api.post("/notes", { title: "Untitled", content: "" });
       setNotes((prev) => [data, ...prev]);
       setActiveId(data.id);
+      setActiveNoteId(data.id);
       setTitle(data.title);
       setContent("");
       setEditing(true);
+      setDraft(data.id, { title: data.title, content: "", editing: true });
       toast.success("New note created");
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed to create note");
@@ -100,6 +138,7 @@ export default function Notes() {
     try {
       const { data } = await api.put(`/notes/${activeId}`, { title, content });
       setNotes((prev) => prev.map((n) => (n.id === activeId ? data : n)));
+      clearDraft(activeId);
       setEditing(false);
       toast.success("Saved");
     } catch (e) {
@@ -113,12 +152,14 @@ export default function Notes() {
     if (!activeId || !isOwner) return;
     try {
       await api.delete(`/notes/${activeId}`);
+      clearDraft(activeId);
       const remaining = notes.filter((n) => n.id !== activeId);
       setNotes(remaining);
       if (remaining.length) {
         selectNote(remaining[0]);
       } else {
         setActiveId(null);
+        setActiveNoteId(null);
         setTitle("");
         setContent("");
         setEditing(false);
@@ -161,6 +202,19 @@ export default function Notes() {
     }
   };
 
+  const listPreview = (note) => {
+    const draft = getDraft(note.id);
+    if (draft && (draft.title || stripHtml(draft.content))) {
+      return preview(draft.content) || draft.title || "Empty note";
+    }
+    return preview(note.content);
+  };
+
+  const listTitle = (note) => {
+    const draft = getDraft(note.id);
+    return (draft?.title || note.title || "Untitled");
+  };
+
   const renderNoteItem = (note) => (
     <li key={note.id} className="group flex items-stretch">
       <button
@@ -170,7 +224,12 @@ export default function Notes() {
         data-testid={`note-item-${note.id}`}
       >
         <div className="flex items-center gap-1.5">
-          <span className="text-sm font-semibold text-[var(--bx-text)] truncate">{note.title || "Untitled"}</span>
+          <span className="text-sm font-semibold text-[var(--bx-text)] truncate">{listTitle(note)}</span>
+          {getDraft(note.id)?.editing && note.is_owner !== false && (
+            <span className="shrink-0 text-[9px] uppercase tracking-widest bx-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">
+              Draft
+            </span>
+          )}
           {note.is_owner === false && (
             <span className="shrink-0 text-[9px] uppercase tracking-widest bx-mono px-1.5 py-0.5 rounded bg-[var(--bx-brand-soft)] text-[var(--bx-brand)] font-semibold">
               Shared
@@ -182,7 +241,7 @@ export default function Notes() {
         </div>
         <div className="text-xs text-[var(--bx-text-3)] mt-0.5 truncate">
           {note.is_owner === false ? `From ${note.owner_name} · ` : ""}
-          {preview(note.content)}
+          {listPreview(note)}
         </div>
         {note.is_owner && note.shared_with_users?.length > 0 && (
           <div className="text-[10px] text-[var(--bx-text-3)] mt-1 flex items-center gap-1">
@@ -296,12 +355,13 @@ export default function Notes() {
               <RichTextEditor
                 key={`edit-${activeId}`}
                 editorKey={activeId}
+                noteId={activeId}
                 value={content}
                 onChange={setContent}
                 placeholder="Start writing… Use the toolbar for bold, headings, lists, links, and images."
               />
               <p className="text-[10px] text-[var(--bx-text-3)] bx-mono uppercase tracking-widest">
-                Click Save to finish editing
+                Draft saved automatically · click Save when finished
               </p>
             </div>
           ) : (

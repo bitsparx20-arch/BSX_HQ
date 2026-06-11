@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { useNavigate, Navigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { useNavigate, Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,9 +11,19 @@ import { toast } from "sonner";
 export default function Login() {
   const { user, login, loading } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const reason = searchParams.get("reason");
+    if (reason === "signed-in-elsewhere") {
+      toast.error("You were signed out — this account is active on another device.");
+    } else if (reason === "session-invalid") {
+      toast.error("Your session expired. Please sign in again.");
+    }
+  }, [searchParams]);
 
   if (!loading && user) return <Navigate to="/" replace />;
 

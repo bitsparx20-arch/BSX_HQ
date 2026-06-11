@@ -3,6 +3,32 @@ import {
 } from "date-fns";
 
 const MAX_OCCURRENCES = 366;
+const IST = "Asia/Kolkata";
+
+/** Parse meeting timestamps; naive values are treated as IST. */
+export function parseMeetingInstant(iso) {
+  if (!iso) return null;
+  const s = String(iso).trim();
+  if (/[Zz]|[+-]\d{2}:\d{2}$/.test(s)) return new Date(s);
+  return new Date(`${s.replace(" ", "T")}+05:30`);
+}
+
+export function formatMeetingDateTimeIST(iso) {
+  const d = parseMeetingInstant(iso);
+  if (!d || Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: IST,
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  return `${get("weekday")}, ${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")} IST`;
+}
 
 export const getMeetingLink = (meeting) => {
   const link = (meeting?.meeting_link || "").trim();
@@ -17,8 +43,8 @@ export const getMeetingLink = (meeting) => {
 
 export const meetingEndTime = (meeting) => {
   if (!meeting?.start_at) return null;
-  const start = new Date(meeting.start_at);
-  if (meeting.end_at) return new Date(meeting.end_at);
+  const start = parseMeetingInstant(meeting.start_at);
+  if (meeting.end_at) return parseMeetingInstant(meeting.end_at);
   return new Date(start.getTime() + 60 * 60 * 1000);
 };
 
@@ -29,14 +55,14 @@ export const isUpcomingMeeting = (meeting) => {
 
 export const isMeetingLive = (meeting, now = new Date()) => {
   if (!meeting?.start_at) return false;
-  const start = new Date(meeting.start_at);
+  const start = parseMeetingInstant(meeting.start_at);
   const end = meetingEndTime(meeting);
   if (!end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
   return now >= start && now <= end;
 };
 
 export const sortMeetingsByStart = (list) =>
-  [...(list || [])].sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+  [...(list || [])].sort((a, b) => parseMeetingInstant(a.start_at) - parseMeetingInstant(b.start_at));
 
 export function calendarRange(date, view) {
   if (view === "month") {
@@ -62,10 +88,10 @@ export function expandRecurringMeetings(meetings, { from, to } = {}) {
 
   for (const m of meetings || []) {
     const recurring = m.recurring || "none";
-    const start = m.start_at ? new Date(m.start_at) : null;
+    const start = m.start_at ? parseMeetingInstant(m.start_at) : null;
     if (!start || Number.isNaN(start.getTime())) continue;
 
-    const end = m.end_at ? new Date(m.end_at) : new Date(start.getTime() + 60 * 60 * 1000);
+    const end = m.end_at ? parseMeetingInstant(m.end_at) : new Date(start.getTime() + 60 * 60 * 1000);
     const duration = Math.max(end.getTime() - start.getTime(), 15 * 60 * 1000);
 
     if (!recurring || recurring === "none") {

@@ -17,12 +17,17 @@ import logging
 import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
+from zoneinfo import ZoneInfo
 
 import bcrypt
 import jwt
 import httpx
 from bedrock_llm import bedrock_chat
 from document_storage import save_pdf, read_pdf, delete_pdf, ensure_dirs as ensure_blob_dirs
+from note_storage import (
+    save_note_image, read_note_image, delete_note_image, ensure_note_image_dirs,
+    ALLOWED_IMAGE_TYPES,
+)
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -55,6 +60,7 @@ db_name = os.environ.get("DB_NAME", "").strip() or "bitsparx_hq"
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
+APP_TZ = ZoneInfo("Asia/Kolkata")
 JWT_ALGORITHM = "HS256"
 JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
 if not JWT_SECRET:
@@ -86,7 +92,10 @@ def verify_password(pw: str, hashed: str) -> bool:
     except Exception:
         return False
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+SESSION_RESTRICTED_ROLES = frozenset({"employee", "manager"})
+TAB_STALE_SECONDS = 45
+
+def create_access_token(user_id: str, email: str, role: str, sid: Optional[str] = None) -> str:
     payload = {
         "sub": user_id,
         "email": email,
@@ -94,7 +103,33 @@ def create_access_token(user_id: str, email: str, role: str) -> str:
         "type": "access",
         "exp": datetime.now(timezone.utc) + timedelta(hours=12),
     }
+    if sid:
+        payload["sid"] = sid
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+async def _validate_user_session(user: dict, payload: dict) -> None:
+    if user.get("role") not in SESSION_RESTRICTED_ROLES:
+        return
+    sid = payload.get("sid")
+    if not sid:
+        raise HTTPException(status_code=401, detail="SESSION_INVALID")
+    session = await db.user_sessions.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not session or session.get("sid") != sid:
+        raise HTTPException(status_code=401, detail="SESSION_SUPERSEDED")
+
+def _tab_is_active(session: dict) -> bool:
+    if not session.get("active_tab_id"):
+        return False
+    claimed = session.get("tab_claimed_at")
+    if not claimed:
+        return False
+    try:
+        dt = datetime.fromisoformat(claimed.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() < TAB_STALE_SECONDS
+    except Exception:
+        return False
 
 def strip_id(doc: dict) -> dict:
     if doc and "_id" in doc:
@@ -120,6 +155,7 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="User not found")
     user = strip_id(user)
     user.pop("password_hash", None)
+    await _validate_user_session(user, payload)
     return user
 
 def require_roles(*roles: str):
@@ -265,6 +301,11 @@ wa = WhatsAppService()
 class LoginInput(BaseModel):
     email: EmailStr
     password: str
+    device_id: Optional[str] = None
+
+class SessionTabInput(BaseModel):
+    device_id: str
+    tab_id: str
 
 class RegisterInput(BaseModel):
     email: EmailStr
@@ -286,7 +327,29 @@ async def login(body: LoginInput, response: Response):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token(user["id"], user["email"], user.get("role", "employee"))
+
+    role = user.get("role", "employee")
+    sid = None
+    if role in SESSION_RESTRICTED_ROLES:
+        device_id = (body.device_id or "").strip()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="Device ID required")
+        sid = new_id()
+        await db.user_sessions.update_one(
+            {"user_id": user["id"]},
+            {"$set": {
+                "user_id": user["id"],
+                "sid": sid,
+                "device_id": device_id,
+                "active_tab_id": None,
+                "tab_claimed_at": None,
+                "last_seen_at": now_utc(),
+                "created_at": now_utc(),
+            }},
+            upsert=True,
+        )
+
+    token = create_access_token(user["id"], user["email"], role, sid=sid)
     response.set_cookie(
         key="access_token",
         value=token,
@@ -323,8 +386,54 @@ async def register(body: RegisterInput, user: dict = Depends(require_roles("admi
 async def me(user: dict = Depends(get_current_user)):
     return user
 
+@api.post("/auth/session/claim-tab")
+async def claim_session_tab(body: SessionTabInput, user: dict = Depends(get_current_user)):
+    if user.get("role") not in SESSION_RESTRICTED_ROLES:
+        return {"ok": True}
+    session = await db.user_sessions.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="SESSION_INVALID")
+    if session.get("device_id") and session["device_id"] != body.device_id.strip():
+        raise HTTPException(status_code=401, detail="SESSION_SUPERSEDED")
+    active_tab = session.get("active_tab_id")
+    if active_tab and active_tab != body.tab_id and _tab_is_active(session):
+        raise HTTPException(status_code=409, detail="Another tab is already active. Close other tabs and refresh.")
+    await db.user_sessions.update_one(
+        {"user_id": user["id"]},
+        {"$set": {
+            "active_tab_id": body.tab_id,
+            "tab_claimed_at": now_utc(),
+            "last_seen_at": now_utc(),
+            "device_id": body.device_id.strip(),
+        }},
+    )
+    return {"ok": True}
+
+@api.post("/auth/session/heartbeat")
+async def session_heartbeat(body: SessionTabInput, user: dict = Depends(get_current_user)):
+    if user.get("role") not in SESSION_RESTRICTED_ROLES:
+        return {"ok": True}
+    session = await db.user_sessions.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="SESSION_INVALID")
+    if session.get("device_id") != body.device_id.strip():
+        raise HTTPException(status_code=401, detail="SESSION_SUPERSEDED")
+    if session.get("active_tab_id") != body.tab_id:
+        raise HTTPException(status_code=409, detail="This tab is no longer the active session.")
+    await db.user_sessions.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"last_seen_at": now_utc(), "tab_claimed_at": now_utc()}},
+    )
+    return {"ok": True}
+
 @api.post("/auth/logout")
-async def logout(response: Response):
+async def logout(response: Response, request: Request):
+    try:
+        user = await get_current_user(request)
+        if user.get("role") in SESSION_RESTRICTED_ROLES:
+            await db.user_sessions.delete_one({"user_id": user["id"]})
+    except HTTPException:
+        pass
     response.delete_cookie("access_token", path="/")
     return {"ok": True}
 
@@ -419,12 +528,23 @@ def normalize_phone_optional(raw: Optional[str]) -> Optional[str]:
     except HTTPException:
         return None
 
-def format_checkin_time(iso_ts: str) -> str:
-    dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+def parse_app_datetime(iso_ts: str) -> datetime:
+    raw = (iso_ts or "").strip()
+    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone()
-    return local.strftime("%I:%M %p on %d %b %Y").lstrip("0")
+        # datetime-local inputs and stored meeting times are IST for Bitsparx HQ
+        dt = dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(APP_TZ)
+
+def format_ist_datetime(iso_ts: Optional[str]) -> str:
+    if not iso_ts:
+        return "TBD"
+    dt = parse_app_datetime(iso_ts)
+    time_part = dt.strftime("%I:%M %p").lstrip("0")
+    return f"{dt.strftime('%A')}, {dt.day} {dt.strftime('%b %Y')}, {time_part} IST"
+
+def format_checkin_time(iso_ts: str) -> str:
+    return format_ist_datetime(iso_ts)
 
 async def resolve_user_phone(user: dict) -> str:
     email = (user.get("email") or "").strip().lower()
@@ -470,13 +590,7 @@ def _norm_attendee_key(value: Optional[str]) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
 def format_meeting_time(start_at: Optional[str]) -> str:
-    if not start_at:
-        return "TBD"
-    dt = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone()
-    return local.strftime("%I:%M %p on %d %b %Y").lstrip("0")
+    return format_ist_datetime(start_at)
 
 def resolve_meeting_link(meeting: dict) -> str:
     link = (meeting.get("meeting_link") or "").strip()
@@ -1428,6 +1542,15 @@ class NoteInput(BaseModel):
 class ShareNoteInput(BaseModel):
     user_ids: List[str] = Field(default_factory=list)
 
+NOTE_IMAGE_URL_RE = re.compile(r"/api/notes/images/([a-f0-9-]{36})")
+
+async def _link_note_images(content: str, note_id: str, user_id: str) -> None:
+    for image_id in set(NOTE_IMAGE_URL_RE.findall(content or "")):
+        await db.note_images.update_one(
+            {"id": image_id, "user_id": user_id},
+            {"$set": {"note_id": note_id, "updated_at": now_utc()}},
+        )
+
 async def _enrich_note(note: dict, viewer: dict) -> dict:
     note = dict(note)
     note["is_owner"] = note.get("user_id") == viewer["id"]
@@ -1480,6 +1603,7 @@ async def create_note(body: NoteInput, user: dict = Depends(get_current_user)):
         "updated_at": now_utc(),
     }
     await db.notes.insert_one(doc.copy())
+    await _link_note_images(doc["content"], doc["id"], user["id"])
     return await _enrich_note(strip_id(doc), user)
 
 @api.put("/notes/{note_id}")
@@ -1493,6 +1617,7 @@ async def update_note(note_id: str, body: NoteInput, user: dict = Depends(get_cu
         "updated_at": now_utc(),
     }
     await db.notes.update_one({"id": note_id}, {"$set": updates})
+    await _link_note_images(updates["content"], note_id, user["id"])
     doc = await db.notes.find_one({"id": note_id}, {"_id": 0})
     return await _enrich_note(doc, user)
 
@@ -1533,6 +1658,90 @@ async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
     result = await db.notes.delete_one({"id": note_id, "user_id": user["id"]})
     if result.deleted_count == 0:
         raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+async def _user_can_access_note_image(user: dict, image_doc: dict) -> bool:
+    if image_doc.get("user_id") == user["id"]:
+        return True
+    note_id = image_doc.get("note_id")
+    if not note_id:
+        return False
+    note = await db.notes.find_one({"id": note_id}, {"_id": 0, "user_id": 1, "shared_with": 1})
+    if not note:
+        return False
+    if note.get("user_id") == user["id"]:
+        return True
+    return user["id"] in (note.get("shared_with") or [])
+
+@api.post("/notes/images")
+async def upload_note_image(
+    file: UploadFile = File(...),
+    note_id: Optional[str] = Form(None),
+    user: dict = Depends(get_current_user),
+):
+    if note_id:
+        note = await db.notes.find_one({"id": note_id, "user_id": user["id"]}, {"_id": 0, "id": 1})
+        if not note:
+            raise HTTPException(404, "Note not found")
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(400, "Only JPEG, PNG, GIF, and WebP images are allowed")
+    data = await file.read()
+    image_id = new_id()
+    ext = ALLOWED_IMAGE_TYPES[content_type]
+    blob_key = f"{image_id}{ext}"
+    try:
+        size_bytes = save_note_image(blob_key, data, content_type)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    doc = {
+        "id": image_id,
+        "user_id": user["id"],
+        "note_id": note_id,
+        "blob_key": blob_key,
+        "mime": content_type,
+        "size_bytes": size_bytes,
+        "created_at": now_utc(),
+    }
+    await db.note_images.insert_one(doc.copy())
+    return {"id": image_id, "url": f"/api/notes/images/{image_id}"}
+
+@api.get("/notes/images/{image_id}")
+async def get_note_image(image_id: str, user: dict = Depends(get_current_user)):
+    image_doc = await db.note_images.find_one({"id": image_id}, {"_id": 0})
+    if not image_doc:
+        raise HTTPException(404, "Image not found")
+    if not await _user_can_access_note_image(user, image_doc):
+        raise HTTPException(403, "Access denied")
+    try:
+        data, mime = read_note_image(image_doc["blob_key"])
+    except FileNotFoundError:
+        raise HTTPException(404, "Image file missing")
+    return StreamingResponse(iter([data]), media_type=mime)
+
+@api.patch("/notes/images/{image_id}")
+async def update_note_image_meta(
+    image_id: str,
+    note_id: Optional[str] = Form(None),
+    user: dict = Depends(get_current_user),
+):
+    image_doc = await db.note_images.find_one({"id": image_id, "user_id": user["id"]}, {"_id": 0})
+    if not image_doc:
+        raise HTTPException(404, "Image not found")
+    if note_id:
+        note = await db.notes.find_one({"id": note_id, "user_id": user["id"]}, {"_id": 0, "id": 1})
+        if not note:
+            raise HTTPException(404, "Note not found")
+    await db.note_images.update_one({"id": image_id}, {"$set": {"note_id": note_id, "updated_at": now_utc()}})
+    return {"ok": True, "url": f"/api/notes/images/{image_id}"}
+
+@api.delete("/notes/images/{image_id}")
+async def remove_note_image(image_id: str, user: dict = Depends(get_current_user)):
+    image_doc = await db.note_images.find_one({"id": image_id, "user_id": user["id"]}, {"_id": 0})
+    if not image_doc:
+        raise HTTPException(404, "Image not found")
+    delete_note_image(image_doc["blob_key"])
+    await db.note_images.delete_one({"id": image_id})
     return {"ok": True}
 
 # Notifications
@@ -1977,12 +2186,15 @@ async def seed():
 @app.on_event("startup")
 async def on_start():
     ensure_blob_dirs()
+    ensure_note_image_dirs()
     # indexes
     await db.users.create_index("email", unique=True)
     await db.attendance.create_index([("user_id", 1), ("date", 1)])
     await db.assigned_tasks.create_index([("assignee_id", 1), ("task_date", 1)])
     await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
     await db.notes.create_index("shared_with")
+    await db.note_images.create_index("note_id")
+    await db.note_images.create_index("user_id")
     await seed()
 
 @app.on_event("shutdown")
