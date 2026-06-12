@@ -14,7 +14,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Plus, VideoCamera, MapPin, Clock } from "@phosphor-icons/react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { getMeetingLink, isMeetingLive, formatMeetingDateTimeIST, upcomingMeetings, expandRecurringMeetings, calendarRange } from "@/lib/meetings";
+import { getMeetingLink, isMeetingLive, formatMeetingDateTimeIST, upcomingMeetings, expandRecurringMeetings, calendarRange, parseMeetingInstant } from "@/lib/meetings";
+import { calendarFormatsIST, toDatetimeLocalInputIST } from "@/lib/datetime";
 
 const locales = { "en-US": enUS };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
@@ -107,8 +108,8 @@ export default function Meetings() {
 
   const openEvent = (ev) => {
     const resource = ev.resource || ev;
-    const start = resource._occurrenceStart || (resource.start_at ? new Date(resource.start_at) : null);
-    const end = resource._occurrenceEnd || (resource.end_at ? new Date(resource.end_at) : null);
+    const start = resource._occurrenceStart || (resource.start_at ? parseMeetingInstant(resource.start_at) : null);
+    const end = resource._occurrenceEnd || (resource.end_at ? parseMeetingInstant(resource.end_at) : null);
     setSelected(resource);
     setForm({
       ...resource,
@@ -190,6 +191,7 @@ export default function Meetings() {
           <Calendar
             localizer={localizer}
             events={events}
+            formats={calendarFormatsIST()}
             startAccessor="start"
             endAccessor="end"
             style={{ height: 640 }}
@@ -365,8 +367,4 @@ export default function Meetings() {
   );
 }
 
-function toLocalInput(d) {
-  if (!d) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+const toLocalInput = toDatetimeLocalInputIST;

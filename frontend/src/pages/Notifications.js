@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader, Section, StatusBadge } from "@/components/Shared";
+import { formatDateTimeIST } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
 import { Trash, WhatsappLogo } from "@phosphor-icons/react";
 import { toast } from "sonner";
@@ -88,7 +89,7 @@ export default function Notifications() {
                   <td className="px-5 py-3 bx-mono text-xs">{n.to}</td>
                   <td className="px-5 py-3 text-slate-600 max-w-xs truncate">{n.message}</td>
                   <td className="px-5 py-3"><StatusBadge status={n.status} /></td>
-                  <td className="px-5 py-3 bx-mono text-xs text-slate-500">{n.sent_at ? new Date(n.sent_at).toLocaleString() : "—"}</td>
+                  <td className="px-5 py-3 bx-mono text-xs text-slate-500">{formatDateTimeIST(n.sent_at)}</td>
                 </tr>
               ))}
               {items.length === 0 && (

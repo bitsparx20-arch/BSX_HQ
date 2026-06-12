@@ -376,6 +376,10 @@ body {
   padding: 0 0.15rem;
 }
 .dark .bx-rich-editor-shell .ProseMirror mark { background: rgba(250, 204, 21, 0.35); }
+.bx-rich-editor-shell .ProseMirror .bx-editor-image-wrap {
+  max-width: 100%;
+  line-height: 0;
+}
 .bx-rich-editor-shell .ProseMirror img.bx-editor-image,
 .bx-rich-editor-shell .ProseMirror img {
   max-width: 100%;
@@ -383,7 +387,7 @@ body {
   border-radius: 0.5rem;
   margin: 0.25rem 0.75rem 0.25rem 0;
   border: 1px solid var(--bx-border);
-  display: inline-block;
+  display: block;
   vertical-align: top;
   cursor: default;
 }
@@ -391,8 +395,11 @@ body {
   outline: 2px solid var(--bx-brand);
   outline-offset: 2px;
 }
+.bx-note-view .bx-note-view-body .bx-editor-image-wrap,
 .bx-note-view .bx-note-view-body img {
   max-width: 100%;
+}
+.bx-note-view .bx-note-view-body img {
   height: auto;
   border-radius: 0.5rem;
   margin: 0.75rem 0;

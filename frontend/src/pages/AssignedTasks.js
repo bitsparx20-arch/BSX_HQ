@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { CaretLeft, CaretRight, Plus } from "@phosphor-icons/react";
 import { toast } from "sonner";
+import { formatDayLabelIST, shiftDateIST, todayIST } from "@/lib/datetime";
 
 const TASK_STAGES = [
   { key: "todo", label: "To do", color: "#94A3B8" },
@@ -24,24 +25,9 @@ const TASK_STAGES = [
   { key: "done", label: "Done", color: "#10B981" },
 ];
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
-
-const shiftDate = (dateStr, days) => {
-  const d = new Date(`${dateStr}T12:00:00`);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-};
-
-const formatDayLabel = (dateStr) => {
-  const d = new Date(`${dateStr}T12:00:00`);
-  const today = todayStr();
-  if (dateStr === today) return "Today";
-  const yesterday = shiftDate(today, -1);
-  if (dateStr === yesterday) return "Yesterday";
-  const tomorrow = shiftDate(today, 1);
-  if (dateStr === tomorrow) return "Tomorrow";
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-};
+const todayStr = todayIST;
+const shiftDate = shiftDateIST;
+const formatDayLabel = formatDayLabelIST;
 
 export default function AssignedTasks() {
   const { user } = useAuth();

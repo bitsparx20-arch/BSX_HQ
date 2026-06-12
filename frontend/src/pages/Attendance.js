@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAttendance } from "@/contexts/AttendanceContext";
-import { PageHeader, KpiCard, Section, StatusBadge, formatDate } from "@/components/Shared";
+import { PageHeader, Section, StatusBadge, formatDate } from "@/components/Shared";
+import { formatTimeIST } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,11 +93,11 @@ export default function Attendance() {
           <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-4">
             <div>
               <div className="bx-mono text-[10px] uppercase tracking-widest text-slate-500">Check-in</div>
-              <div className="text-sm font-semibold bx-mono">{today.check_in ? new Date(today.check_in).toLocaleTimeString() : "—"}</div>
+              <div className="text-sm font-semibold bx-mono">{formatTimeIST(today.check_in)}</div>
             </div>
             <div>
               <div className="bx-mono text-[10px] uppercase tracking-widest text-slate-500">Check-out</div>
-              <div className="text-sm font-semibold bx-mono">{today.check_out ? new Date(today.check_out).toLocaleTimeString() : "—"}</div>
+              <div className="text-sm font-semibold bx-mono">{formatTimeIST(today.check_out)}</div>
             </div>
             <div>
               <div className="bx-mono text-[10px] uppercase tracking-widest text-slate-500">Work hours</div>
@@ -136,10 +137,10 @@ export default function Attendance() {
                 <tbody className="divide-y divide-slate-100">
                   {records.map((r) => (
                     <tr key={r.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3 bx-mono">{r.date}</td>
+                      <td className="px-5 py-3 bx-mono">{formatDate(r.date)}</td>
                       <td className="px-5 py-3">{canApprove ? r.user_name : ""}</td>
-                      <td className="px-5 py-3 bx-mono">{r.check_in ? new Date(r.check_in).toLocaleTimeString() : "—"}</td>
-                      <td className="px-5 py-3 bx-mono">{r.check_out ? new Date(r.check_out).toLocaleTimeString() : "—"}</td>
+                      <td className="px-5 py-3 bx-mono">{formatTimeIST(r.check_in)}</td>
+                      <td className="px-5 py-3 bx-mono">{formatTimeIST(r.check_out)}</td>
                       <td className="px-5 py-3 text-right bx-mono">{r.work_hours || "—"}</td>
                     </tr>
                   ))}

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import Link from "@tiptap/extension-link";
@@ -76,6 +76,34 @@ function parseWidthPercent(width) {
   return Math.min(100, Math.max(20, Number(match?.[1]) || 100));
 }
 
+function getSelectedImageTarget(editor) {
+  if (!editor) return null;
+  const { state } = editor;
+  const { selection } = state;
+  if (selection instanceof NodeSelection && selection.node?.type.name === "image") {
+    return { pos: selection.from, attrs: { ...selection.node.attrs } };
+  }
+  const probe = selection.from;
+  let found = null;
+  state.doc.descendants((node, pos) => {
+    if (node.type.name !== "image") return undefined;
+    if (probe >= pos && probe < pos + node.nodeSize) {
+      found = { pos, attrs: { ...node.attrs } };
+      return false;
+    }
+    return undefined;
+  });
+  return found;
+}
+
+function updateImageAtPos(editor, pos, attrsPatch) {
+  const node = editor.state.doc.nodeAt(pos);
+  if (node?.type.name !== "image") return false;
+  const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrsPatch });
+  editor.view.dispatch(tr);
+  return true;
+}
+
 async function insertImageFile(editor, file, noteId) {
   if (!file?.type?.startsWith("image/")) return false;
   if (file.size > MAX_IMAGE_BYTES) {
@@ -142,14 +170,54 @@ function ToolbarButton({ active, onClick, title, children, disabled }) {
   );
 }
 
-function EditorToolbar({ editor, noteId }) {
+function EditorToolbar({ editor, noteId, onImageResizeActive, onImageResizeCommit }) {
   const [imageWidth, setImageWidth] = useState(100);
-  const imageActive = editor?.isActive("image");
+  const [imageTarget, setImageTarget] = useState(null);
+  const [isResizingImage, setIsResizingImage] = useState(false);
+  const resizingRef = useRef(false);
+  const imageTargetRef = useRef(null);
+
+  const armImageResize = useCallback(() => {
+    if (!editor) return;
+    const target = imageTargetRef.current || getSelectedImageTarget(editor);
+    if (!target) return;
+    imageTargetRef.current = target;
+    setImageTarget(target);
+    setImageWidth(parseWidthPercent(target.attrs.width));
+    resizingRef.current = true;
+    setIsResizingImage(true);
+    onImageResizeActive?.(true);
+    try {
+      const tr = editor.state.tr.setSelection(
+        NodeSelection.create(editor.state.doc, target.pos),
+      );
+      editor.view.dispatch(tr);
+    } catch {
+      /* keep going */
+    }
+  }, [editor, onImageResizeActive]);
+
+  const syncImageTarget = useCallback(() => {
+    if (!editor || resizingRef.current) return;
+    const target = getSelectedImageTarget(editor);
+    if (target) {
+      imageTargetRef.current = target;
+      setImageTarget(target);
+      setImageWidth(parseWidthPercent(target.attrs.width));
+    } else {
+      imageTargetRef.current = null;
+      setImageTarget(null);
+    }
+  }, [editor]);
 
   useEffect(() => {
-    if (!editor || !imageActive) return;
-    setImageWidth(parseWidthPercent(editor.getAttributes("image").width));
-  }, [editor, imageActive, editor?.state?.selection]);
+    if (!editor) return undefined;
+    syncImageTarget();
+    editor.on("selectionUpdate", syncImageTarget);
+    return () => {
+      editor.off("selectionUpdate", syncImageTarget);
+    };
+  }, [editor, syncImageTarget]);
 
   const setLink = useCallback(() => {
     const prev = editor.getAttributes("link").href;
@@ -174,15 +242,47 @@ function EditorToolbar({ editor, noteId }) {
   }, [editor, noteId]);
 
   const onImageWidthChange = (value) => {
+    const target = imageTargetRef.current;
+    if (!editor || !target) return;
     const pct = Number(value);
     setImageWidth(pct);
-    editor.chain().focus().updateAttributes("image", { width: `${pct}%` }).run();
+    const width = `${pct}%`;
+    if (!updateImageAtPos(editor, target.pos, { width })) return;
+    const next = { ...target, attrs: { ...target.attrs, width } };
+    imageTargetRef.current = next;
+    setImageTarget(next);
+  };
+
+  const onImageWidthCommit = () => {
+    if (!editor) return;
+    resizingRef.current = false;
+    setIsResizingImage(false);
+    onImageResizeActive?.(false);
+    const target = imageTargetRef.current;
+    if (target) {
+      try {
+        const tr = editor.state.tr.setSelection(
+          NodeSelection.create(editor.state.doc, target.pos),
+        );
+        editor.view.dispatch(tr);
+      } catch {
+        /* image may have moved */
+      }
+    }
+    onImageResizeCommit?.();
   };
 
   const removeImage = useCallback(async () => {
-    const src = editor.getAttributes("image").src;
+    const target = imageTargetRef.current;
+    if (!editor || !target) return;
+    const src = target.attrs.src;
     const imageId = extractNoteImageId(src);
-    editor.chain().focus().deleteSelection().run();
+    const node = editor.state.doc.nodeAt(target.pos);
+    if (!node || node.type.name !== "image") return;
+    const tr = editor.state.tr.delete(target.pos, target.pos + node.nodeSize);
+    editor.view.dispatch(tr);
+    imageTargetRef.current = null;
+    setImageTarget(null);
     if (!imageId) return;
     try {
       await deleteNoteImage(imageId);
@@ -195,17 +295,23 @@ function EditorToolbar({ editor, noteId }) {
 
   return (
     <div className="flex flex-col gap-2 p-2 border-b border-[var(--bx-border)] bg-[var(--bx-bg-3)]/50" data-testid="editor-toolbar">
-      {imageActive && (
+      {(imageTarget || isResizingImage) && (
         <div className="flex items-center gap-3 px-1 py-1 rounded-md bg-[var(--bx-card)] border border-[var(--bx-border)]">
           <span className="text-[10px] uppercase tracking-widest text-[var(--bx-text-3)] bx-mono shrink-0">Image width</span>
           <input
             type="range"
             min={20}
             max={100}
-            step={5}
+            step={1}
             value={imageWidth}
+            onPointerDown={armImageResize}
             onChange={(e) => onImageWidthChange(e.target.value)}
-            className="flex-1 min-w-[120px] accent-[var(--bx-brand)]"
+            onInput={(e) => onImageWidthChange(e.target.value)}
+            onPointerUp={onImageWidthCommit}
+            onPointerCancel={onImageWidthCommit}
+            onTouchEnd={onImageWidthCommit}
+            onKeyUp={onImageWidthCommit}
+            className="flex-1 min-w-[120px] accent-[var(--bx-brand)] cursor-pointer touch-none"
             data-testid="image-width-slider"
           />
           <span className="text-xs bx-mono text-[var(--bx-text-2)] w-10 text-right">{imageWidth}%</span>
@@ -391,6 +497,8 @@ function EditorToolbar({ editor, noteId }) {
 }
 
 export default function RichTextEditor({ value, onChange, placeholder = "Start writing…", editorKey, noteId }) {
+  const resizingImageRef = useRef(false);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
@@ -406,7 +514,10 @@ export default function RichTextEditor({ value, onChange, placeholder = "Start w
       FontFamily,
     ],
     content: value || "",
-    onUpdate: ({ editor: ed }) => onChange(ed.getHTML()),
+    onUpdate: ({ editor: ed }) => {
+      if (resizingImageRef.current) return;
+      onChange(ed.getHTML());
+    },
     editorProps: {
       attributes: {
         class: "bx-rich-editor prose prose-sm max-w-none focus:outline-none min-h-[20rem] px-4 py-3",
@@ -451,7 +562,7 @@ export default function RichTextEditor({ value, onChange, placeholder = "Start w
   }, [editorKey]);
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || resizingImageRef.current) return;
     const current = editor.getHTML();
     const next = value || "";
     if (current !== next && next !== "<p></p>") {
@@ -465,7 +576,14 @@ export default function RichTextEditor({ value, onChange, placeholder = "Start w
 
   return (
     <div className="bx-rich-editor-shell border border-[var(--bx-border)] rounded-lg overflow-hidden bg-[var(--bx-card)] flex flex-col flex-1">
-      <EditorToolbar editor={editor} noteId={noteId} />
+      <EditorToolbar
+        editor={editor}
+        noteId={noteId}
+        onImageResizeActive={(active) => { resizingImageRef.current = active; }}
+        onImageResizeCommit={() => {
+          if (editor) onChange(editor.getHTML());
+        }}
+      />
       <div
         className="flex-1 overflow-y-auto bx-rich-editor-scroll min-h-0 cursor-text"
         onMouseDown={(e) => {

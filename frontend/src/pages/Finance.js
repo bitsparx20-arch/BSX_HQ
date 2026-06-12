@@ -11,6 +11,19 @@ import { Label } from "@/components/ui/label";
 import { FilePdf } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
+const expenseTotal = (form) => (Number(form.qty) || 0) * (Number(form.unit_cost) || 0);
+
+const prepareExpenseFormForEdit = (row) => ({
+  qty: row.qty ?? 1,
+  unit_cost: row.unit_cost ?? row.amount ?? 0,
+});
+
+const transformExpensePayload = (payload) => {
+  const qty = Number(payload.qty) || 0;
+  const unit_cost = Number(payload.unit_cost) || 0;
+  return { ...payload, qty, unit_cost, amount: qty * unit_cost };
+};
+
 function InvoicePdfButton({ row, isAdmin }) {
   const canDownload = isAdmin && (row.amount_set || row.amount);
 
@@ -199,7 +212,18 @@ export default function Finance() {
     { key: "project", label: "Project" },
     { key: "vendor", label: "Vendor" },
     { key: "date", label: "Date", type: "date" },
-    { key: "amount", label: "Amount", type: "currency", align: "right" },
+    { key: "qty", label: "Qty", align: "right", render: (r) => <span className="bx-mono">{r.qty ?? 1}</span> },
+    {
+      key: "unit_cost",
+      label: "Unit cost",
+      align: "right",
+      render: (r) => (
+        <span className="bx-mono">
+          {formatCurrency(r.unit_cost ?? (r.qty ? (r.amount || 0) / r.qty : r.amount))}
+        </span>
+      ),
+    },
+    { key: "amount", label: "Total", type: "currency", align: "right" },
   ];
   const expenseFields = [
     { key: "title", label: "Title", required: true, full: true },
@@ -207,7 +231,8 @@ export default function Finance() {
     { key: "project", label: "Project" },
     { key: "vendor", label: "Vendor" },
     { key: "date", label: "Date", type: "date" },
-    { key: "amount", label: "Amount (₹)", type: "number" },
+    { key: "qty", label: "Qty", type: "number", default: 1 },
+    { key: "unit_cost", label: "Cost per unit (₹)", type: "number" },
   ];
 
   const invoiceColumns = [
@@ -256,8 +281,10 @@ export default function Finance() {
     },
   ];
 
-  const managerExpenseColumns = expenseColumns.filter((c) => c.key !== "amount");
-  const managerExpenseFields = expenseFields.filter((f) => f.key !== "amount");
+  const managerExpenseColumns = expenseColumns.filter(
+    (c) => !["amount", "unit_cost"].includes(c.key),
+  );
+  const managerExpenseFields = expenseFields;
 
   return (
     <div>
@@ -306,6 +333,19 @@ export default function Finance() {
           testId="expenses"
           columns={isAdmin ? expenseColumns : managerExpenseColumns}
           fields={isAdmin ? expenseFields : managerExpenseFields}
+          prepareFormForEdit={prepareExpenseFormForEdit}
+          transformPayload={transformExpensePayload}
+          formExtra={({ form }) => (
+            <div className="space-y-2 w-full min-w-0">
+              <Label className="text-xs">Total amount</Label>
+              <div className="flex h-10 w-full min-w-0 items-center justify-between gap-3 rounded-md border border-input bg-[var(--bx-bg-3)] px-3">
+                <span className="text-xs text-[var(--bx-text-3)] truncate">Qty × Cost per unit</span>
+                <span className="text-sm font-semibold bx-mono text-[var(--bx-text)] shrink-0">
+                  {formatCurrency(expenseTotal(form))}
+                </span>
+              </div>
+            </div>
+          )}
         />
 
         <ModuleTable

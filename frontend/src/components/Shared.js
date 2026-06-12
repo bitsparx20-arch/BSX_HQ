@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDateIST } from "@/lib/datetime";
 
 export const PageHeader = ({ eyebrow, title, description, actions }) => (
   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-6 sm:mb-8 pb-5 sm:pb-6 border-b border-[var(--bx-border)] gap-3">
@@ -74,16 +75,7 @@ export const Section = ({ title, children, action, className = "" }) => (
 export const formatCurrency = (n) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n || 0);
 
-export const formatDate = (s) => {
-  if (!s) return "—";
-  try {
-    const d = new Date(s);
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "2-digit" });
-  } catch {
-    return s;
-  }
-};
+export const formatDate = formatDateIST;
 
 export const EmptyState = ({ message = "No records yet" }) => (
   <div className="py-12 text-center text-sm text-[var(--bx-text-3)]">{message}</div>

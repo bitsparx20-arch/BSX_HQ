@@ -80,6 +80,12 @@ api = APIRouter(prefix="/api")
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def now_ist() -> datetime:
+    return datetime.now(APP_TZ)
+
+def today_ist() -> str:
+    return now_ist().strftime("%Y-%m-%d")
+
 def new_id() -> str:
     return str(uuid.uuid4())
 
@@ -1327,7 +1333,7 @@ class AttendanceCheckIn(BaseModel):
 
 @api.post("/attendance/check-in")
 async def check_in(body: AttendanceCheckIn, user: dict = Depends(get_current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_ist()
     existing = await db.attendance.find_one({"user_id": user["id"], "date": today})
     if existing and existing.get("check_in"):
         raise HTTPException(400, "Already checked in today")
@@ -1347,7 +1353,7 @@ async def check_in(body: AttendanceCheckIn, user: dict = Depends(get_current_use
 
 @api.post("/attendance/check-out")
 async def check_out(body: AttendanceCheckIn, user: dict = Depends(get_current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_ist()
     record = await db.attendance.find_one({"user_id": user["id"], "date": today})
     if not record:
         raise HTTPException(400, "Not checked in today")
@@ -1361,7 +1367,11 @@ async def check_out(body: AttendanceCheckIn, user: dict = Depends(get_current_us
     except Exception:
         record["work_hours"] = 0
     await db.attendance.update_one({"id": record["id"]}, {"$set": record})
-    await wa.send(user.get("phone") or "919999999999", f"Checked out at {record['check_out']} ({record['work_hours']}h)", event="attendance_checkout")
+    await wa.send(
+        user.get("phone") or "919999999999",
+        f"Checked out at {format_ist_datetime(record['check_out'])} ({record['work_hours']}h)",
+        event="attendance_checkout",
+    )
     return strip_id(record)
 
 @api.get("/attendance")
@@ -1372,7 +1382,7 @@ async def list_attendance(user: dict = Depends(get_current_user)):
 
 @api.get("/attendance/today")
 async def my_attendance_today(user: dict = Depends(get_current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_ist()
     rec = await db.attendance.find_one({"user_id": user["id"], "date": today}, {"_id": 0})
     return rec or {}
 
@@ -1765,7 +1775,7 @@ async def send_test_notification(body: TestNotify, user: dict = Depends(require_
 # Reports / Dashboard
 @api.get("/reports/dashboard")
 async def dashboard_stats(user: dict = Depends(get_current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_ist()
     counts = {
         "employees": await db.employees.count_documents({}),
         "projects": await db.projects.count_documents({}),
@@ -1839,7 +1849,7 @@ async def sidebar_alerts(user: dict = Depends(get_current_user)):
 
 @api.get("/me/dashboard")
 async def my_dashboard(user: dict = Depends(get_current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = today_ist()
     my_tasks = await db.tasks.count_documents(_employee_match(user, ["assignee"]))
     my_open_tasks = await db.tasks.count_documents(
         {"$and": [_employee_match(user, ["assignee"]), {"status": {"$ne": "done"}}]}
@@ -2120,11 +2130,11 @@ async def seed():
 
     if await db.expenses.count_documents({}) == 0:
         await db.expenses.insert_many([
-            {"id": new_id(), "title": "AWS infrastructure", "category": "Cloud", "project": "Aurora POS Rollout", "amount": 42000, "date": "2026-01-15", "vendor": "Amazon Web Services", "created_at": now_utc()},
-            {"id": new_id(), "title": "Office rent", "category": "Operations", "amount": 85000, "date": "2026-01-01", "vendor": "WeWork", "created_at": now_utc()},
-            {"id": new_id(), "title": "Marketing campaign", "category": "Marketing", "amount": 32000, "date": "2025-12-20", "vendor": "Google Ads", "created_at": now_utc()},
-            {"id": new_id(), "title": "Design tools subscription", "category": "Software", "amount": 18000, "date": "2025-11-10", "vendor": "Figma", "created_at": now_utc()},
-            {"id": new_id(), "title": "Travel — client visit", "category": "Travel", "amount": 12500, "date": "2026-02-02", "vendor": "MakeMyTrip", "created_at": now_utc()},
+            {"id": new_id(), "title": "AWS infrastructure", "category": "Cloud", "project": "Aurora POS Rollout", "qty": 1, "unit_cost": 42000, "amount": 42000, "date": "2026-01-15", "vendor": "Amazon Web Services", "created_at": now_utc()},
+            {"id": new_id(), "title": "Office rent", "category": "Operations", "qty": 1, "unit_cost": 85000, "amount": 85000, "date": "2026-01-01", "vendor": "WeWork", "created_at": now_utc()},
+            {"id": new_id(), "title": "Marketing campaign", "category": "Marketing", "qty": 4, "unit_cost": 8000, "amount": 32000, "date": "2025-12-20", "vendor": "Google Ads", "created_at": now_utc()},
+            {"id": new_id(), "title": "Design tools subscription", "category": "Software", "qty": 6, "unit_cost": 3000, "amount": 18000, "date": "2025-11-10", "vendor": "Figma", "created_at": now_utc()},
+            {"id": new_id(), "title": "Travel — client visit", "category": "Travel", "qty": 2, "unit_cost": 6250, "amount": 12500, "date": "2026-02-02", "vendor": "MakeMyTrip", "created_at": now_utc()},
         ])
 
     if await db.invoices.count_documents({}) == 0:

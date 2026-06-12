@@ -9,7 +9,8 @@ import NoteContentView from "@/components/NoteContentView";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Trash, FloppyDisk, NotePencil, PencilSimple, ShareNetwork, Users } from "@phosphor-icons/react";
+import { Plus, Trash, FloppyDisk, NotePencil, PencilSimple, ShareNetwork, Users, CaretLeft, List } from "@phosphor-icons/react";
+import { noteHtmlHasVisibleContent } from "@/lib/noteImages";
 import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
 import { useSidebarAlerts } from "@/contexts/SidebarAlertsContext";
@@ -19,8 +20,9 @@ const stripHtml = (html) => (html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g
 
 const preview = (html, max = 60) => {
   const line = stripHtml(html);
-  if (!line) return "Empty note";
-  return line.length > max ? `${line.slice(0, max)}…` : line;
+  if (line) return line.length > max ? `${line.slice(0, max)}…` : line;
+  if (noteHtmlHasVisibleContent(html)) return "Image";
+  return "Empty note";
 };
 
 const applyDraftOrNote = (note, draft) => ({
@@ -42,6 +44,13 @@ export default function Notes() {
   const [shareTargets, setShareTargets] = useState([]);
   const [shareNoteId, setShareNoteId] = useState(null);
   const [selectedShareIds, setSelectedShareIds] = useState([]);
+  const [listOpen, setListOpen] = useState(() => {
+    try {
+      return localStorage.getItem("bx-notes-list-open") !== "0";
+    } catch {
+      return true;
+    }
+  });
 
   const active = notes.find((n) => n.id === activeId);
   const isOwner = active?.is_owner !== false;
@@ -138,6 +147,8 @@ export default function Notes() {
     try {
       const { data } = await api.put(`/notes/${activeId}`, { title, content });
       setNotes((prev) => prev.map((n) => (n.id === activeId ? data : n)));
+      setTitle(data.title ?? title);
+      setContent(data.content ?? content);
       clearDraft(activeId);
       setEditing(false);
       toast.success("Saved");
@@ -204,7 +215,7 @@ export default function Notes() {
 
   const listPreview = (note) => {
     const draft = getDraft(note.id);
-    if (draft && (draft.title || stripHtml(draft.content))) {
+    if (draft && (draft.title || noteHtmlHasVisibleContent(draft.content))) {
       return preview(draft.content) || draft.title || "Empty note";
     }
     return preview(note.content);
@@ -213,6 +224,18 @@ export default function Notes() {
   const listTitle = (note) => {
     const draft = getDraft(note.id);
     return (draft?.title || note.title || "Untitled");
+  };
+
+  const toggleListOpen = () => {
+    setListOpen((open) => {
+      const next = !open;
+      try {
+        localStorage.setItem("bx-notes-list-open", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   };
 
   const renderNoteItem = (note) => (
@@ -276,7 +299,8 @@ export default function Notes() {
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4 min-h-[32rem]">
+      <div className={`grid grid-cols-1 gap-4 min-h-[32rem] ${listOpen ? "lg:grid-cols-[260px_1fr]" : "lg:grid-cols-1"}`}>
+        {listOpen && (
         <Section title={`Notes — ${notes.length}`} className="flex flex-col">
           {notes.length === 0 ? (
             <div className="p-8 text-center text-sm text-[var(--bx-text-3)] flex-1 flex flex-col items-center justify-center">
@@ -308,12 +332,24 @@ export default function Notes() {
             </div>
           )}
         </Section>
+        )}
 
         <Section
           title={editing ? "Editor" : "View"}
           action={
-            activeId ? (
-              <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={toggleListOpen}
+                title={listOpen ? "Hide notes list" : "Show notes list"}
+                data-testid="toggle-notes-list"
+              >
+                {listOpen ? <CaretLeft size={16} /> : <List size={16} />}
+              </Button>
+            {activeId ? (
+              <>
                 {isOwner && !editing && (
                   <>
                     <Button variant="outline" size="sm" onClick={() => openShare(activeId)} data-testid="share-note-btn">
@@ -334,8 +370,9 @@ export default function Notes() {
                     <Trash size={16} />
                   </Button>
                 )}
-              </div>
-            ) : null
+              </>
+            ) : null}
+            </div>
           }
           className="flex flex-col min-h-[32rem]"
         >

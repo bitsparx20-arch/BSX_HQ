@@ -1,17 +1,12 @@
 import {
   startOfWeek, endOfWeek, startOfMonth, endOfMonth, addMonths, subMonths,
 } from "date-fns";
+import { IST, parseAppInstant } from "@/lib/datetime";
 
 const MAX_OCCURRENCES = 366;
-const IST = "Asia/Kolkata";
 
 /** Parse meeting timestamps; naive values are treated as IST. */
-export function parseMeetingInstant(iso) {
-  if (!iso) return null;
-  const s = String(iso).trim();
-  if (/[Zz]|[+-]\d{2}:\d{2}$/.test(s)) return new Date(s);
-  return new Date(`${s.replace(" ", "T")}+05:30`);
-}
+export const parseMeetingInstant = parseAppInstant;
 
 export function formatMeetingDateTimeIST(iso) {
   const d = parseMeetingInstant(iso);

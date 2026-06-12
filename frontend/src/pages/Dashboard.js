@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { getMeetingLink, formatMeetingDateTimeIST, upcomingMeetings } from "@/lib/meetings";
+import { formatTimeIST } from "@/lib/datetime";
 import { api } from "@/lib/api";
 import { PageHeader, KpiCard, Section, StatusBadge, formatCurrency, formatDate } from "@/components/Shared";
 import { useAuth } from "@/contexts/AuthContext";
@@ -258,8 +259,8 @@ function EmployeeDashboard({ user }) {
             {s.today_attendance?.check_out ? "Checked out" : s.today_attendance?.check_in ? "You are checked in" : "Not checked in yet"}
           </div>
           <div className="text-sm text-white/85 mt-1">
-            {s.today_attendance?.check_in && <span>In · <span className="bx-mono">{new Date(s.today_attendance.check_in).toLocaleTimeString()}</span></span>}
-            {s.today_attendance?.check_out && <span> · Out · <span className="bx-mono">{new Date(s.today_attendance.check_out).toLocaleTimeString()}</span></span>}
+            {s.today_attendance?.check_in && <span>In · <span className="bx-mono">{formatTimeIST(s.today_attendance.check_in)}</span></span>}
+            {s.today_attendance?.check_out && <span> · Out · <span className="bx-mono">{formatTimeIST(s.today_attendance.check_out)}</span></span>}
             {s.today_attendance?.work_hours != null && <span> · {s.today_attendance.work_hours}h</span>}
           </div>
         </div>
