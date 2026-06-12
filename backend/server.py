@@ -726,6 +726,7 @@ async def sync_employee_user(employee: dict, password: Optional[str] = None):
         "role": designation_to_role(employee.get("designation")),
         "phone": employee.get("phone"),
         "department": employee.get("department"),
+        "employee_id": employee.get("id"),
     }
     existing = await db.users.find_one({"email": email})
     if password:
@@ -739,6 +740,42 @@ async def sync_employee_user(employee: dict, password: Optional[str] = None):
             "created_at": now_utc(),
             **user_fields,
         })
+
+async def _employee_emails() -> list[str]:
+    rows = await db.employees.find({}, {"_id": 0, "email": 1}).to_list(2000)
+    return sorted({
+        (r.get("email") or "").lower().strip()
+        for r in rows
+        if (r.get("email") or "").strip()
+    })
+
+async def _directory_users_query(exclude_user_id: Optional[str] = None) -> dict:
+    """Active platform users: current employees plus CEO/admin accounts."""
+    emails = await _employee_emails()
+    query: dict = {
+        "$or": [
+            {"email": {"$in": emails}},
+            {"role": "admin"},
+        ]
+    }
+    if exclude_user_id:
+        return {"$and": [query, {"id": {"$ne": exclude_user_id}}]}
+    return query
+
+async def list_directory_users(exclude_user_id: Optional[str] = None) -> list[dict]:
+    query = await _directory_users_query(exclude_user_id)
+    return await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
+
+async def is_directory_user(user_id: str) -> bool:
+    user_doc = await db.users.find_one({"id": user_id}, {"_id": 0, "email": 1, "role": 1})
+    if not user_doc:
+        return False
+    if user_doc.get("role") == "admin":
+        return True
+    email = (user_doc.get("email") or "").lower().strip()
+    if not email:
+        return False
+    return await db.employees.count_documents({"email": email}) > 0
 
 def _employee_notify(doc: dict):
     return f"Welcome to Bitsparx HQ, {doc.get('name', 'colleague')}! Your account is being set up."
@@ -791,9 +828,16 @@ async def update_employee(item_id: str, body: GenericDoc, user: dict = Depends(r
 
 @api.delete("/employees/{item_id}", name="delete_employees")
 async def delete_employee(item_id: str, user: dict = Depends(require_roles("admin", "manager"))):
-    result = await db.employees.delete_one({"id": item_id})
-    if result.deleted_count == 0:
+    doc = await db.employees.find_one({"id": item_id}, {"_id": 0, "email": 1})
+    if not doc:
         raise HTTPException(404, "Not found")
+    email = (doc.get("email") or "").lower().strip()
+    if email:
+        linked = await db.users.find_one({"email": email}, {"_id": 0, "id": 1})
+        if linked:
+            await db.user_sessions.delete_many({"user_id": linked["id"]})
+            await db.users.delete_one({"email": email})
+    await db.employees.delete_one({"id": item_id})
     return {"ok": True}
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1461,6 +1505,8 @@ async def create_assigned_task(body: AssignedTaskInput, user: dict = Depends(get
     if user["role"] == "admin":
         if not body.assignee_id:
             raise HTTPException(400, "Assignee is required")
+        if not await is_directory_user(body.assignee_id):
+            raise HTTPException(400, "Assignee is not an active team member")
         assignee = await db.users.find_one({"id": body.assignee_id}, {"_id": 0, "password_hash": 0})
         if not assignee:
             raise HTTPException(404, "Assignee not found")
@@ -1505,6 +1551,8 @@ async def update_assigned_task(task_id: str, body: GenericDoc, user: dict = Depe
         updates.pop("id", None)
         updates.pop("created_at", None)
         if updates.get("assignee_id"):
+            if not await is_directory_user(updates["assignee_id"]):
+                raise HTTPException(400, "Assignee is not an active team member")
             assignee = await db.users.find_one({"id": updates["assignee_id"]}, {"_id": 0})
             if not assignee:
                 raise HTTPException(404, "Assignee not found")
@@ -1586,11 +1634,11 @@ async def _enrich_note(note: dict, viewer: dict) -> dict:
 
 @api.get("/notes/share-targets")
 async def note_share_targets(user: dict = Depends(get_current_user)):
-    users = await db.users.find(
-        {"id": {"$ne": user["id"]}},
-        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1},
-    ).sort("name", 1).to_list(500)
-    return users
+    users = await list_directory_users(exclude_user_id=user["id"])
+    return [
+        {"id": u["id"], "name": u.get("name"), "email": u.get("email"), "role": u.get("role")}
+        for u in users
+    ]
 
 @api.get("/notes")
 async def list_notes(user: dict = Depends(get_current_user)):
@@ -1638,9 +1686,9 @@ async def share_note(note_id: str, body: ShareNoteInput, user: dict = Depends(ge
         raise HTTPException(404, "Not found")
     user_ids = list(dict.fromkeys(body.user_ids))
     if user_ids:
-        count = await db.users.count_documents({"id": {"$in": user_ids}})
-        if count != len(user_ids):
-            raise HTTPException(400, "One or more users not found")
+        allowed = {u["id"] for u in await list_directory_users()}
+        if not all(uid in allowed for uid in user_ids):
+            raise HTTPException(400, "One or more users are not active team members")
     old_shared = set(existing.get("shared_with") or [])
     new_shared = set(user_ids)
     newly_added = new_shared - old_shared
@@ -1819,8 +1867,7 @@ async def finance_trend(user: dict = Depends(get_current_user)):
 
 @api.get("/users")
 async def list_users(user: dict = Depends(require_roles("admin", "manager"))):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
-    return users
+    return await list_directory_users()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Employee-scoped views (role-aware)
